@@ -20,20 +20,22 @@ using System.Text;
 [assembly: AssemblyProduct("BladeBall Macro")]
 [assembly: AssemblyCompany("Leo")]
 [assembly: AssemblyCopyright("Leo 2026")]
-[assembly: AssemblyVersion("17.0.0.0")]
-[assembly: AssemblyFileVersion("17.0.0.0")]
+[assembly: AssemblyVersion("18.0.0.0")]
+[assembly: AssemblyFileVersion("18.0.0.0")]
 
 // ================= Design =================
 static class Theme
 {
-    public static readonly Color BG = Color.FromArgb(10, 11, 17);     // im Hauptfenster durchsichtig (Glas)
-    public static readonly Color CARD = Color.FromArgb(27, 30, 44);
-    public static readonly Color CHIP = Color.FromArgb(46, 51, 72);
-    public static readonly Color ACCENT = Color.FromArgb(0, 168, 255);
-    public static readonly Color OK = Color.FromArgb(40, 205, 130);
-    public static readonly Color OFF = Color.FromArgb(240, 84, 96);
-    public static readonly Color MUTED = Color.FromArgb(128, 128, 155);
-    public static readonly Color EDGE = Color.FromArgb(44, 44, 62);
+    public static readonly Color BG = Color.FromArgb(10, 10, 12);      // = durchsichtiges Glas im Hauptfenster
+    public static readonly Color CARD = BG;                              // Karten sind Glas, nur die Kante ist sichtbar
+    public static readonly Color GHOST = Color.FromArgb(28, 28, 31);     // dezente Flaeche (bleibt klickbar)
+    public static readonly Color CHIP = Color.FromArgb(44, 44, 48);
+    public static readonly Color ACCENT = Color.FromArgb(242, 242, 245); // Weiss statt Blau
+    public static readonly Color OK = Color.FromArgb(52, 211, 125);
+    public static readonly Color OFF = Color.FromArgb(235, 87, 87);
+    public static readonly Color MUTED = Color.FromArgb(150, 150, 158);
+    public static readonly Color TEXT2 = Color.FromArgb(215, 215, 220);
+    public static readonly Color EDGE = Color.FromArgb(60, 60, 66);
     public static readonly Color WARN = Color.FromArgb(245, 180, 60);
 
     public static Button Btn(string text, Rectangle r, Color c, float size)
@@ -92,7 +94,9 @@ public class RoundButton : Button
             p.CloseFigure();
             using (SolidBrush b = new SolidBrush(fill)) g.FillPath(b, p);
         }
-        TextRenderer.DrawText(g, Text, Font, ClientRectangle, ForeColor, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
+        double lum = (0.299 * fill.R + 0.587 * fill.G + 0.114 * fill.B) / 255.0;
+        Color txt = lum > 0.6 ? Color.FromArgb(18, 18, 20) : ForeColor;
+        TextRenderer.DrawText(g, Text, Font, ClientRectangle, txt, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
     }
 }
 
@@ -169,7 +173,7 @@ public static class Glass
     {
         foreach (int state in new int[] { 4, 3 }) // 4 = Acrylic, 3 = einfacher Blur
         {
-            AccentPolicy a = new AccentPolicy { State = state, Flags = 2, Color = 0x99140B0A }; // AABBGGRR: dunkles Blau-Schwarz
+            AccentPolicy a = new AccentPolicy { State = state, Flags = 2, Color = 0x990A0A0A }; // AABBGGRR: leicht schwarzes, neutrales Glas
             int size = Marshal.SizeOf(a);
             IntPtr mem = Marshal.AllocHGlobal(size);
             try
@@ -272,30 +276,30 @@ public static class AppIcon
             // Ball mit Glow
             float m = s * 0.17f;
             RectangleF ball = new RectangleF(m, m, s - 2 * m, s - 2 * m);
-            using (Pen glow = new Pen(Color.FromArgb(90, 0, 168, 255), s * 0.07f))
+            using (Pen glow = new Pen(Color.FromArgb(70, 255, 255, 255), s * 0.05f))
                 g.DrawEllipse(glow, m - s * 0.03f, m - s * 0.03f, ball.Width + s * 0.06f, ball.Height + s * 0.06f);
-            using (LinearGradientBrush lg = new LinearGradientBrush(ball, Color.FromArgb(110, 215, 255), Color.FromArgb(0, 80, 220), 45f))
+            using (LinearGradientBrush lg = new LinearGradientBrush(ball, Color.FromArgb(78, 78, 86), Color.FromArgb(18, 18, 22), 45f))
                 g.FillEllipse(lg, ball);
             // Schwert: Klinge, Parierstange, Griff
             Func<float, float, PointF> P = (x, y) => new PointF(x * s, y * s);
             PointF[] blade = { P(0.385f, 0.555f), P(0.445f, 0.615f), P(0.835f, 0.165f) };
             using (SolidBrush sh = new SolidBrush(Color.FromArgb(110, 0, 20, 60)))
                 g.FillPolygon(sh, new PointF[] { P(0.395f, 0.585f), P(0.455f, 0.645f), P(0.85f, 0.19f) });
-            using (LinearGradientBrush bb = new LinearGradientBrush(P(0.4f, 0.6f), P(0.83f, 0.17f), Color.FromArgb(235, 245, 255), Color.White))
+            using (LinearGradientBrush bb = new LinearGradientBrush(P(0.4f, 0.6f), P(0.83f, 0.17f), Color.FromArgb(225, 225, 230), Color.White))
                 g.FillPolygon(bb, blade);
-            using (Pen edge = new Pen(Color.FromArgb(150, 180, 225, 255), s * 0.012f))
+            using (Pen edge = new Pen(Color.FromArgb(150, 200, 200, 205), s * 0.012f))
                 g.DrawLine(edge, P(0.415f, 0.585f), P(0.835f, 0.165f));
-            using (Pen guard = new Pen(Color.FromArgb(255, 200, 70), s * 0.06f))
+            using (Pen guard = new Pen(Color.FromArgb(200, 200, 208), s * 0.06f))
             {
                 guard.StartCap = LineCap.Round; guard.EndCap = LineCap.Round;
                 g.DrawLine(guard, P(0.33f, 0.53f), P(0.47f, 0.67f));
             }
-            using (Pen grip = new Pen(Color.FromArgb(40, 40, 60), s * 0.065f))
+            using (Pen grip = new Pen(Color.FromArgb(30, 30, 34), s * 0.065f))
             {
                 grip.StartCap = LineCap.Round; grip.EndCap = LineCap.Round;
                 g.DrawLine(grip, P(0.39f, 0.61f), P(0.25f, 0.75f));
             }
-            using (SolidBrush pommel = new SolidBrush(Color.FromArgb(255, 200, 70)))
+            using (SolidBrush pommel = new SolidBrush(Color.FromArgb(200, 200, 208)))
                 g.FillEllipse(pommel, 0.195f * s, 0.745f * s, 0.075f * s, 0.075f * s);
         }
         return b;
@@ -600,7 +604,7 @@ public class KeyForm : Form
 
         Label t1 = new Label { Text = "BLADE BALL", Font = new Font("Segoe UI", 15f, FontStyle.Bold), AutoSize = true, Location = new Point(18, 14), BackColor = Theme.BG };
         int w1 = TextRenderer.MeasureText(t1.Text, t1.Font).Width;
-        Label t2 = new Label { Text = "MACRO", Font = new Font("Segoe UI", 15f, FontStyle.Bold), ForeColor = Theme.ACCENT, AutoSize = true, Location = new Point(14 + w1, 14), BackColor = Theme.BG };
+        Label t2 = new Label { Text = "MACRO", Font = new Font("Segoe UI Light", 15f, FontStyle.Regular), ForeColor = Theme.TEXT2, AutoSize = true, Location = new Point(14 + w1, 14), BackColor = Theme.BG };
         Button close = Theme.Btn("✕", new Rectangle(296, 10, 34, 30), Theme.BG, 10f);
         close.FlatAppearance.MouseOverBackColor = Theme.OFF;
         close.Click += delegate { DialogResult = DialogResult.Cancel; Close(); };
@@ -641,7 +645,7 @@ public class MacroForm : Form
     public const string ACCESS_KEY = "Hallo";
 
     // Versionsnummer: bei jedem neuen Update um 1 erhoehen
-    public const int BUILD = 17;
+    public const int BUILD = 18;
 
     // >>> Online-Updates fuer Freunde: hier den Raw-Link zu deiner BladeBallMacro.cs auf GitHub eintragen <<<
     // Beispiel: https://raw.githubusercontent.com/DEINNAME/bladeball-macro/main/BladeBallMacro.cs
@@ -803,7 +807,6 @@ public class MacroForm : Form
 
         // Glas: Hintergrund komplett durchsichtig, Karten leicht durchscheinend
         TransparencyKey = Theme.BG;
-        Opacity = 0.93;
         backdrop = new GlassBackdrop(this);
         if (!Glass.IsWin11())
             using (GraphicsPath rp = Glass.Rounded(new Rectangle(0, 0, Width, Height), 12)) Region = new Region(rp);
@@ -869,10 +872,10 @@ public class MacroForm : Form
         PictureBox logo = new PictureBox { Image = AppIcon.Draw(28), Bounds = new Rectangle(18, 9, 28, 28), BackColor = Theme.BG, SizeMode = PictureBoxSizeMode.Normal };
         Label t1 = new Label { Text = "BLADE BALL", Font = new Font("Segoe UI", 15f, FontStyle.Bold), AutoSize = true, Location = new Point(52, 10), BackColor = Theme.BG };
         int w1 = TextRenderer.MeasureText(t1.Text, t1.Font).Width;
-        Label t2 = new Label { Text = "MACRO", Font = new Font("Segoe UI", 15f, FontStyle.Bold), ForeColor = Theme.ACCENT, AutoSize = true, Location = new Point(48 + w1, 10), BackColor = Theme.BG };
+        Label t2 = new Label { Text = "MACRO", Font = new Font("Segoe UI Light", 15f, FontStyle.Regular), ForeColor = Theme.TEXT2, AutoSize = true, Location = new Point(48 + w1, 10), BackColor = Theme.BG };
         Label ver = new Label { Text = "v" + BUILD, ForeColor = Theme.MUTED, Font = new Font("Segoe UI", 8.5f, FontStyle.Bold), AutoSize = true, Location = new Point(52 + w1 + TextRenderer.MeasureText("MACRO", t2.Font).Width, 18), BackColor = Theme.BG };
-        Button min = Theme.Btn("—", new Rectangle(294, 9, 34, 28), Color.FromArgb(24, 27, 40), 10f);
-        Button close = Theme.Btn("✕", new Rectangle(334, 9, 34, 28), Color.FromArgb(24, 27, 40), 10f);
+        Button min = Theme.Btn("—", new Rectangle(294, 9, 34, 28), Theme.GHOST, 10f);
+        Button close = Theme.Btn("✕", new Rectangle(334, 9, 34, 28), Theme.GHOST, 10f);
         ((RoundButton)close).HoverColor = Theme.OFF;
         min.Click += delegate { WindowState = FormWindowState.Minimized; };
         close.Click += delegate { Close(); };
@@ -883,9 +886,9 @@ public class MacroForm : Form
         status = new RoundPanel { Bounds = new Rectangle(20, 52, 340, 104) };
         dot = new Dot { Bounds = new Rectangle(18, 22, 18, 18), BackColor = Theme.CARD };
         statusText = new Label { Font = new Font("Segoe UI", 21f, FontStyle.Bold), BackColor = Theme.CARD, AutoSize = false, Bounds = new Rectangle(40, 10, 190, 42) };
-        hintText = new Label { ForeColor = Color.FromArgb(200, 200, 220), BackColor = Theme.CARD, AutoSize = false, Bounds = new Rectangle(18, 54, 310, 22) };
+        hintText = new Label { ForeColor = Theme.TEXT2, BackColor = Theme.CARD, AutoSize = false, Bounds = new Rectangle(18, 54, 310, 22) };
         statsText = new Label { ForeColor = Theme.MUTED, BackColor = Theme.CARD, Font = new Font("Segoe UI", 8.5f), AutoSize = false, Bounds = new Rectangle(18, 76, 310, 20) };
-        armBtn = Theme.Btn("ON", new Rectangle(246, 16, 78, 34), Theme.OK, 11f);
+        armBtn = Theme.Btn("ON", new Rectangle(246, 16, 78, 34), Theme.ACCENT, 11f);
         ((RoundButton)armBtn).Radius = 17;
         armBtn.Click += delegate { SetArmed(!armed); };
         statsText.Click += delegate { if (updState == 3) InstallOnline(); };
@@ -894,8 +897,8 @@ public class MacroForm : Form
         // Tabs
         RoundPanel tabs = new RoundPanel { Bounds = new Rectangle(20, 166, 340, 46) };
         tabMacro = Theme.Btn("MACRO", new Rectangle(6, 6, 106, 34), Theme.ACCENT, 10f);
-        tabBoost = Theme.Btn("BOOST", new Rectangle(117, 6, 106, 34), Theme.CARD, 10f);
-        tabExtras = Theme.Btn("EXTRAS", new Rectangle(228, 6, 106, 34), Theme.CARD, 10f);
+        tabBoost = Theme.Btn("BOOST", new Rectangle(117, 6, 106, 34), Theme.GHOST, 10f);
+        tabExtras = Theme.Btn("EXTRAS", new Rectangle(228, 6, 106, 34), Theme.GHOST, 10f);
         tabMacro.Click += delegate { ShowPage(0); };
         tabBoost.Click += delegate { ShowPage(1); };
         tabExtras.Click += delegate { ShowPage(2); };
@@ -939,7 +942,7 @@ public class MacroForm : Form
 
         RoundPanel scanCard = new RoundPanel { Bounds = new Rectangle(0, 280, 340, 60) };
         scanCard.Controls.Add(Theme.Caption("AUTO SCAN", 16, 10));
-        scanText = new Label { ForeColor = Color.FromArgb(200, 200, 220), BackColor = Theme.CARD, Font = new Font("Segoe UI", 8.5f), AutoSize = false, Bounds = new Rectangle(16, 30, 210, 20) };
+        scanText = new Label { ForeColor = Theme.TEXT2, BackColor = Theme.CARD, Font = new Font("Segoe UI", 8.5f), AutoSize = false, Bounds = new Rectangle(16, 30, 210, 20) };
         scanBtn = Theme.Btn("SCAN", new Rectangle(238, 12, 88, 36), Theme.CHIP, 9.5f);
         scanBtn.Click += delegate { StartScan(); };
         scanCard.Controls.AddRange(new Control[] { scanText, scanBtn });
@@ -950,7 +953,7 @@ public class MacroForm : Form
         fpsCard = new RoundPanel { Bounds = new Rectangle(0, 0, 340, 132) };
         Label fpsTitle = new Label { Text = "FPS MODE", Font = new Font("Segoe UI", 15f, FontStyle.Bold), BackColor = Theme.CARD, AutoSize = true, Location = new Point(18, 12) };
         fpsModeInfo = new Label { ForeColor = Theme.MUTED, BackColor = Theme.CARD, Font = new Font("Segoe UI", 8.5f), AutoSize = false, Bounds = new Rectangle(19, 42, 220, 18) };
-        fpsModeList = new Label { ForeColor = Color.FromArgb(200, 200, 220), BackColor = Theme.CARD, Font = new Font("Segoe UI", 8.5f), AutoSize = false, Bounds = new Rectangle(19, 66, 310, 58),
+        fpsModeList = new Label { ForeColor = Theme.TEXT2, BackColor = Theme.CARD, Font = new Font("Segoe UI", 8.5f), AutoSize = false, Bounds = new Rectangle(19, 66, 310, 58),
             Text = "Max power plan  ·  Windows Game Mode\nFast GPU for Roblox  ·  Background recording off\nCloses junk apps  ·  Slows down background apps" };
         fpsModeBtn = Theme.Btn("OFF", new Rectangle(248, 16, 78, 34), Theme.CHIP, 11f);
         ((RoundButton)fpsModeBtn).Radius = 17;
@@ -1021,15 +1024,15 @@ public class MacroForm : Form
         macroPage.Visible = page == 0;
         boostPage.Visible = page == 1;
         extrasPage.Visible = page == 2;
-        SetBack(tabMacro, page == 0 ? Theme.ACCENT : Theme.CARD);
-        SetBack(tabBoost, page == 1 ? Theme.ACCENT : Theme.CARD);
-        SetBack(tabExtras, page == 2 ? Theme.ACCENT : Theme.CARD);
+        SetBack(tabMacro, page == 0 ? Theme.ACCENT : Theme.GHOST);
+        SetBack(tabBoost, page == 1 ? Theme.ACCENT : Theme.GHOST);
+        SetBack(tabExtras, page == 2 ? Theme.ACCENT : Theme.GHOST);
     }
 
     static void SetToggle(Button b, bool on)
     {
         SetText(b, on ? "ON" : "OFF");
-        SetBack(b, on ? Theme.OK : Theme.CHIP);
+        SetBack(b, on ? Theme.ACCENT : Theme.CHIP);
     }
 
     // ---------- PC-Boost ----------
@@ -1404,7 +1407,7 @@ public class MacroForm : Form
         using (Pen p = new Pen(Color.FromArgb(60, 255, 255, 255))) e.Graphics.DrawPath(p, gp);
         e.Graphics.SmoothingMode = SmoothingMode.None;
         Rectangle line = new Rectangle(20, 47, 340, 2);
-        using (LinearGradientBrush gb = new LinearGradientBrush(line, Theme.ACCENT, Theme.BG, LinearGradientMode.Horizontal))
+        using (LinearGradientBrush gb = new LinearGradientBrush(line, Color.FromArgb(160, 255, 255, 255), Color.FromArgb(0, 255, 255, 255), LinearGradientMode.Horizontal))
             e.Graphics.FillRectangle(gb, line);
     }
 
@@ -1421,19 +1424,18 @@ public class MacroForm : Form
         else { SetText(statusText, "READY"); sc = Theme.ACCENT; }
         SetFore(statusText, sc);
         dot.DotColor = sc;
-        status.AccentBar = sc;
         if (!full) return;
 
         SetText(armBtn, armed ? "ON" : "OFF");
-        SetBack(armBtn, armed ? Theme.OK : Theme.OFF);
+        SetBack(armBtn, armed ? Theme.ACCENT : Theme.CHIP);
         for (int i = 0; i < 2; i++) SetBack(modeBtns[i], i == mode ? Theme.ACCENT : Theme.CHIP);
         for (int i = 0; i < 4; i++) SetBack(presetBtns[i], i == preset ? Theme.ACCENT : Theme.CHIP);
 
         SetToggle(minBtn, autoMin);
         SetText(fpsModeBtn, fpsMode ? "ON" : "OFF");
-        SetBack(fpsModeBtn, fpsMode ? Theme.OK : Theme.CHIP);
-        fpsCard.AccentBar = fpsMode ? Theme.OK : Color.Empty;
-        SetFore(fpsModeList, fpsMode ? Color.FromArgb(200, 200, 220) : Theme.MUTED);
+        SetBack(fpsModeBtn, fpsMode ? Theme.ACCENT : Theme.CHIP);
+        fpsCard.AccentBar = Color.Empty;
+        SetFore(fpsModeList, fpsMode ? Theme.TEXT2 : Theme.MUTED);
         SetText(fpsModeInfo, !fpsMode ? "One click for max FPS" :
             ("Active · " + closedApps + " closed · " + slowedApps + " slowed" + (boostFailed ? " · no power plan" : "")));
         SetToggle(chatBtn, chatProtect);
