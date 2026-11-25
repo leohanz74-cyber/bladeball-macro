@@ -20,8 +20,8 @@ using System.Text;
 [assembly: AssemblyProduct("BladeBall Macro")]
 [assembly: AssemblyCompany("Leo")]
 [assembly: AssemblyCopyright("Leo 2026")]
-[assembly: AssemblyVersion("14.0.0.0")]
-[assembly: AssemblyFileVersion("14.0.0.0")]
+[assembly: AssemblyVersion("15.0.0.0")]
+[assembly: AssemblyFileVersion("15.0.0.0")]
 
 // ================= Design =================
 static class Theme
@@ -126,13 +126,15 @@ public class RoundPanel : Panel
 public class Dot : Control
 {
     Color c = Color.Gray;
+    int glowA = 60;
     public Color DotColor { get { return c; } set { if (c != value) { c = value; Invalidate(); } } }
+    public int Glow { get { return glowA; } set { if (glowA != value) { glowA = value; Invalidate(); } } }
     public Dot() { SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer, true); }
     protected override void OnPaint(PaintEventArgs e)
     {
         e.Graphics.Clear(BackColor);
         e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-        using (SolidBrush glow = new SolidBrush(Color.FromArgb(60, c))) e.Graphics.FillEllipse(glow, 0, 0, Width - 1, Height - 1);
+        using (SolidBrush glow = new SolidBrush(Color.FromArgb(glowA, c))) e.Graphics.FillEllipse(glow, 0, 0, Width - 1, Height - 1);
         using (SolidBrush b = new SolidBrush(c)) e.Graphics.FillEllipse(b, 3, 3, Width - 7, Height - 7);
     }
 }
@@ -529,7 +531,7 @@ public class MacroForm : Form
     public const string ACCESS_KEY = "Hallo";
 
     // Versionsnummer: bei jedem neuen Update um 1 erhoehen
-    public const int BUILD = 14;
+    public const int BUILD = 15;
 
     // >>> Online-Updates fuer Freunde: hier den Raw-Link zu deiner BladeBallMacro.cs auf GitHub eintragen <<<
     // Beispiel: https://raw.githubusercontent.com/DEINNAME/bladeball-macro/main/BladeBallMacro.cs
@@ -634,6 +636,7 @@ public class MacroForm : Form
     Label boostDesc, fpsDesc, updDesc;
     volatile int updState = 0; // 0 nichts, 1 prueft, 2 aktuell, 3 Update da, 4 Fehler
     volatile int remoteBuild = 0;
+    long lastCheckMs = 0;
     string remoteSrc = null;
     bool fpsOn = false;
     int prevGameMode = -2, prevDvr = -2, prevCapture = -2; // -2 = noch nicht gesichert, -1 = war nicht gesetzt
@@ -756,6 +759,7 @@ public class MacroForm : Form
         armBtn = Theme.Btn("ON", new Rectangle(246, 16, 78, 34), Theme.OK, 11f);
         ((RoundButton)armBtn).Radius = 17;
         armBtn.Click += delegate { SetArmed(!armed); };
+        statsText.Click += delegate { if (updState == 3) InstallOnline(); };
         status.Controls.AddRange(new Control[] { dot, statusText, hintText, statsText, armBtn });
 
         // Tabs
@@ -834,7 +838,7 @@ public class MacroForm : Form
         // ---------- Seite EXTRAS ----------
         extrasPage = new Panel { Bounds = new Rectangle(20, 222, 340, 340), BackColor = Theme.BG, Visible = false };
         Label d2;
-        extrasPage.Controls.Add(Row(0, "Chat Protection", "Pauses the hotkey while you type", out chatBtn, out d2));
+        extrasPage.Controls.Add(Row(0, "Chat Protection", "Pauses while you type (/ or -)", out chatBtn, out d2));
         RoundPanel ovRow = Row(60, "In-Game Overlay", "Status pill in the top bar", out ovlBtn, out d2);
         d2.Width = 170;
         ovlPosBtn = Theme.Btn(PosArrows[0], new Rectangle(196, 12, 58, 32), Theme.CHIP, 12f);
@@ -1202,6 +1206,22 @@ public class MacroForm : Form
         RefreshUpdateRow();
         SetBack(scanBtn, scanning ? Theme.ACCENT : Theme.CHIP);
         SetText(scanBtn, scanning ? "..." : "SCAN");
+        if (running) dot.Glow = 50 + (int)(70 * Math.Abs(Math.Sin(clock.ElapsedMilliseconds / 160.0)));
+        else dot.Glow = 60;
+        if (UPDATE_URL.Length > 0 && !running && updState != 1 && updState != 3 && clock.ElapsedMilliseconds - lastCheckMs > 20 * 60 * 1000)
+        {
+            lastCheckMs = clock.ElapsedMilliseconds;
+            CheckOnline(); // alle 20 Minuten still nachschauen
+        }
+        if (updState == 3)
+        {
+            SetText(statsText, "⬆  v" + remoteBuild + " available – click here to update");
+            SetFore(statsText, Theme.OK);
+            statsText.Cursor = Cursors.Hand;
+            return;
+        }
+        SetFore(statsText, Theme.MUTED);
+        statsText.Cursor = Cursors.Default;
         SetText(statsText, "Live: " + (int)cpsSmooth + "/s   •   Total: " + c);
         RefreshUi(false);
     }
@@ -1325,6 +1345,7 @@ public class MacroForm : Form
         if (n >= 0 && !capturing)
         {
             uint vk = (uint)Marshal.ReadInt32(l);
+            int scan = Marshal.ReadInt32(l, 4);
             int flags = Marshal.ReadInt32(l, 8);
             int kmsg = w.ToInt32();
             bool kdown = kmsg == 0x100 || kmsg == 0x104;
@@ -1338,7 +1359,7 @@ public class MacroForm : Form
                 // Chat-Schutz: "/" oeffnet den Roblox-Chat, Enter/Esc schliesst ihn
                 else if (chatProtect && RobloxForeground())
                 {
-                    if (!chatOpen && IsChatKey(vk))
+                    if (!chatOpen && IsChatKey(vk, scan, flags))
                     {
                         chatOpen = true;
                         Interlocked.Exchange(ref chatSince, clock.ElapsedTicks);
@@ -1358,10 +1379,14 @@ public class MacroForm : Form
     }
 
     // "/" auf US-Tastatur, Shift+7 auf deutscher Tastatur, Numpad-"/"
-    static bool IsChatKey(uint vk)
+    // Roblox oeffnet den Chat ueber die physische "/"-Taste der US-Tastatur.
+    // Auf deutscher Tastatur ist das die "-"-Taste -> Scancode 0x35 deckt jedes Layout ab.
+    static bool IsChatKey(uint vk, int scan, int flags)
     {
-        if (vk == 0xBF || vk == 0x6F) return true;
-        if (vk == 0x37 && (GetAsyncKeyState(0x10) & 0x8000) != 0) return true;
+        bool extended = (flags & 0x01) != 0;
+        if (scan == 0x35 && !extended) return true;          // "/" (US) bzw. "-" (DE)
+        if (vk == 0xBF || vk == 0x6F) return true;           // OEM-"/" und Numpad-"/"
+        if (vk == 0x37 && (GetAsyncKeyState(0x10) & 0x8000) != 0) return true; // Shift+7 (DE)
         return false;
     }
 
@@ -1702,9 +1727,15 @@ public class MacroForm : Form
         if (remoteSrc == null) return;
         try
         {
-            string tmpCs = Path.Combine(Path.GetTempPath(), "BladeBallMacro_update.cs");
-            File.WriteAllText(tmpCs, remoteSrc, new UTF8Encoding(true));
-            DoUpdate(tmpCs);
+            // Neue Version im Programmordner ablegen, damit "Rebuild" nie auf eine alte Version zurueckfaellt
+            string cs = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "BladeBallMacro.cs");
+            try { File.WriteAllText(cs, remoteSrc, new UTF8Encoding(true)); }
+            catch
+            {
+                cs = Path.Combine(Path.GetTempPath(), "BladeBallMacro_update.cs");
+                File.WriteAllText(cs, remoteSrc, new UTF8Encoding(true));
+            }
+            DoUpdate(cs);
         }
         catch (Exception ex) { MessageBox.Show("Update failed:\n" + ex.Message, "BladeBall Macro"); }
     }
