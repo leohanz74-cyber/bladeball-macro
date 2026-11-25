@@ -20,20 +20,20 @@ using System.Text;
 [assembly: AssemblyProduct("BladeBall Macro")]
 [assembly: AssemblyCompany("Leo")]
 [assembly: AssemblyCopyright("Leo 2026")]
-[assembly: AssemblyVersion("19.0.0.0")]
-[assembly: AssemblyFileVersion("19.0.0.0")]
+[assembly: AssemblyVersion("20.0.0.0")]
+[assembly: AssemblyFileVersion("20.0.0.0")]
 
 // ================= Design =================
 static class Theme
 {
-    public static readonly Color BG = Color.FromArgb(10, 10, 12);      // = durchsichtiges Glas im Hauptfenster
+    public static readonly Color BG = Color.FromArgb(41, 41, 44);      // = durchsichtiges Glas; nah an der Glasfarbe -> saubere Kanten
     public static readonly Color CARD = BG;                              // Karten sind Glas, nur die Kante ist sichtbar
     public static readonly Color GHOST = BG;                             // ohne Flaeche, ohne Kontur
     public static readonly Color CHIP = BG;                              // Glas-Button: nur feine Kontur
     public static readonly Color ACCENT = Color.FromArgb(242, 242, 245); // Weiss statt Blau
     public static readonly Color OK = Color.FromArgb(52, 211, 125);
     public static readonly Color OFF = Color.FromArgb(235, 87, 87);
-    public static readonly Color MUTED = Color.FromArgb(150, 150, 158);
+    public static readonly Color MUTED = Color.FromArgb(170, 170, 176);
     public static readonly Color TEXT2 = Color.FromArgb(215, 215, 220);
     public static readonly Color EDGE = Color.FromArgb(60, 60, 66);
     public static readonly Color WARN = Color.FromArgb(245, 180, 60);
@@ -82,7 +82,7 @@ public class RoundButton : Button
         g.SmoothingMode = SmoothingMode.AntiAlias;
         Color fill = BackColor;
         bool glass = fill == surface || fill.A == 0;
-        if (glass) fill = hover ? (HoverColor != Color.Empty ? HoverColor : Shift(surface, 22)) : surface;
+        if (glass) fill = hover ? (HoverColor != Color.Empty ? HoverColor : Shift(surface, 16)) : surface;
         else if (down) fill = Shift(fill, -18);
         else if (hover) fill = HoverColor != Color.Empty ? HoverColor : Shift(fill, 16);
         int r = Math.Min(Radius, Height / 2);
@@ -97,7 +97,7 @@ public class RoundButton : Button
             p.CloseFigure();
             using (SolidBrush b = new SolidBrush(fill)) g.FillPath(b, p);
             if (glass && Outline)
-                using (Pen pen = new Pen(Color.FromArgb(hover ? 110 : 70, 255, 255, 255))) g.DrawPath(pen, p);
+                using (Pen pen = new Pen(Color.FromArgb(hover ? 90 : 45, 255, 255, 255))) g.DrawPath(pen, p);
         }
         double lum = (0.299 * fill.R + 0.587 * fill.G + 0.114 * fill.B) / 255.0;
         Color txt = lum > 0.6 ? Color.FromArgb(18, 18, 20) : ForeColor;
@@ -129,7 +129,7 @@ public class RoundPanel : Panel
             if (accent != Color.Empty)
                 using (Pen pen = new Pen(Color.FromArgb(110, accent))) e.Graphics.DrawPath(pen, p);
             else
-                using (LinearGradientBrush lb = new LinearGradientBrush(new Rectangle(0, 0, Width, Height), Color.FromArgb(75, 255, 255, 255), Color.FromArgb(12, 255, 255, 255), 90f))
+                using (LinearGradientBrush lb = new LinearGradientBrush(new Rectangle(0, 0, Width, Height), Color.FromArgb(60, 255, 255, 255), Color.FromArgb(18, 255, 255, 255), 90f))
                 using (Pen pen = new Pen(lb, 1f)) e.Graphics.DrawPath(pen, p); // Glas-Kante: oben hell, unten fast weg
         }
         if (accent != Color.Empty)
@@ -178,7 +178,7 @@ public static class Glass
     {
         foreach (int state in new int[] { 4, 3 }) // 4 = Acrylic, 3 = einfacher Blur
         {
-            AccentPolicy a = new AccentPolicy { State = state, Flags = 2, Color = 0x4A2E2E2E }; // AABBGGRR: helles, neutrales "Liquid Glass"
+            AccentPolicy a = new AccentPolicy { State = state, Flags = 2, Color = 0x66262626 }; // AABBGGRR: neutrales Glas, passend zur Schluesselfarbe
             int size = Marshal.SizeOf(a);
             IntPtr mem = Marshal.AllocHGlobal(size);
             try
@@ -677,7 +677,7 @@ public class MacroForm : Form
     public const string ACCESS_KEY = "Hallo";
 
     // Versionsnummer: bei jedem neuen Update um 1 erhoehen
-    public const int BUILD = 19;
+    public const int BUILD = 20;
 
     // >>> Online-Updates fuer Freunde: hier den Raw-Link zu deiner BladeBallMacro.cs auf GitHub eintragen <<<
     // Beispiel: https://raw.githubusercontent.com/DEINNAME/bladeball-macro/main/BladeBallMacro.cs
@@ -948,6 +948,7 @@ public class MacroForm : Form
             int idx = i;
             modeBtns[i] = Theme.Btn(ModeNames[i], new Rectangle(10 + i * 162, 10, 158, 40), Theme.CHIP, 10f);
             modeBtns[i].Click += delegate { SetMode(idx); };
+            ((RoundButton)modeBtns[i]).Outline = false;
             modeCard.Controls.Add(modeBtns[i]);
         }
 
@@ -972,6 +973,7 @@ public class MacroForm : Form
             int idx = i;
             presetBtns[i] = Theme.Btn(PresetNames[i], new Rectangle(10 + i * 80, 42, 76, 42), Theme.CHIP, 9.5f);
             presetBtns[i].Click += delegate { preset = idx; RefreshUi(true); SaveSettings(); };
+            ((RoundButton)presetBtns[i]).Outline = false;
             perf.Controls.Add(presetBtns[i]);
         }
 
