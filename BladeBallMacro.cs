@@ -20,8 +20,8 @@ using System.Text;
 [assembly: AssemblyProduct("BladeBall Macro")]
 [assembly: AssemblyCompany("Leo")]
 [assembly: AssemblyCopyright("Leo 2026")]
-[assembly: AssemblyVersion("15.0.0.0")]
-[assembly: AssemblyFileVersion("15.0.0.0")]
+[assembly: AssemblyVersion("16.0.0.0")]
+[assembly: AssemblyFileVersion("16.0.0.0")]
 
 // ================= Design =================
 static class Theme
@@ -309,7 +309,7 @@ public class AppCleanerForm : Form
 
     // Typische FPS-Fresser -> vorausgewaehlt
     static readonly HashSet<string> Suggest = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
-        "discord", "spotify", "steam", "steamwebhelper", "epicgameslauncher", "epicwebhelper", "teams",
+        "steam", "steamwebhelper", "epicgameslauncher", "epicwebhelper", "teams",
         "ms-teams", "eadesktop", "origin", "battle.net", "riotclientservices", "riotclientux", "upc",
         "ubisoftconnect", "medal", "overwolf", "wallpaper32", "wallpaper64", "lively", "nvidia share" };
 
@@ -531,7 +531,7 @@ public class MacroForm : Form
     public const string ACCESS_KEY = "Hallo";
 
     // Versionsnummer: bei jedem neuen Update um 1 erhoehen
-    public const int BUILD = 15;
+    public const int BUILD = 16;
 
     // >>> Online-Updates fuer Freunde: hier den Raw-Link zu deiner BladeBallMacro.cs auf GitHub eintragen <<<
     // Beispiel: https://raw.githubusercontent.com/DEINNAME/bladeball-macro/main/BladeBallMacro.cs
@@ -632,8 +632,15 @@ public class MacroForm : Form
     Button armBtn, spamChip, hotChip, updateBtn;
     Button[] modeBtns = new Button[2], presetBtns = new Button[4];
     Button scanBtn;
-    Button tabMacro, tabBoost, boostBtn, minBtn, fpsBtn, updBtn;
-    Label boostDesc, fpsDesc, updDesc;
+    Button tabMacro, tabBoost, minBtn, updBtn, fpsModeBtn;
+    Label updDesc, fpsModeInfo, fpsModeList;
+    RoundPanel fpsCard;
+    volatile bool fpsMode = false;
+    int closedApps = 0, slowedApps = 0;
+    readonly Dictionary<int, ProcessPriorityClass> slowed = new Dictionary<int, ProcessPriorityClass>();
+    readonly object slowLock = new object();
+    long lastSweepMs = 0;
+    bool fpsModeSaved = false, fpsModeKnown = false;
     volatile int updState = 0; // 0 nichts, 1 prueft, 2 aktuell, 3 Update da, 4 Fehler
     volatile int remoteBuild = 0;
     long lastCheckMs = 0;
@@ -683,8 +690,10 @@ public class MacroForm : Form
         RefreshUi(true);
 
         try { int v = 2; DwmSetWindowAttribute(Handle, 33, ref v, 4); } catch { }
-        if (boostOn) EnableBoost();
-        if (fpsOn) ApplyFps();
+        // FPS MODE fasst Energieplan + FPS-Tweaks zusammen (alte Einstellungen werden uebernommen)
+        bool startFps = fpsModeKnown ? fpsModeSaved : (boostOn || fpsOn);
+        if (fpsOn && !startFps) RemoveFps();
+        if (startFps) SetFpsMode(true);
         RefreshUi(true);
 
         System.Windows.Forms.Timer ui = new System.Windows.Forms.Timer();
@@ -818,20 +827,27 @@ public class MacroForm : Form
 
         // ---------- Seite BOOST ----------
         boostPage = new Panel { Bounds = new Rectangle(20, 222, 340, 340), BackColor = Theme.BG, Visible = false };
+        fpsCard = new RoundPanel { Bounds = new Rectangle(0, 0, 340, 132) };
+        Label fpsTitle = new Label { Text = "FPS MODE", Font = new Font("Segoe UI", 15f, FontStyle.Bold), BackColor = Theme.CARD, AutoSize = true, Location = new Point(18, 12) };
+        fpsModeInfo = new Label { ForeColor = Theme.MUTED, BackColor = Theme.CARD, Font = new Font("Segoe UI", 8.5f), AutoSize = false, Bounds = new Rectangle(19, 42, 220, 18) };
+        fpsModeList = new Label { ForeColor = Color.FromArgb(200, 200, 220), BackColor = Theme.CARD, Font = new Font("Segoe UI", 8.5f), AutoSize = false, Bounds = new Rectangle(19, 66, 310, 58),
+            Text = "Max power plan  ·  Windows Game Mode\nFast GPU for Roblox  ·  Background recording off\nCloses junk apps  ·  Slows down background apps" };
+        fpsModeBtn = Theme.Btn("OFF", new Rectangle(248, 16, 78, 34), Theme.CHIP, 11f);
+        ((RoundButton)fpsModeBtn).Radius = 17;
+        fpsModeBtn.Click += delegate { SetFpsMode(!fpsMode); };
+        fpsCard.Controls.AddRange(new Control[] { fpsTitle, fpsModeInfo, fpsModeList, fpsModeBtn });
+        boostPage.Controls.Add(fpsCard);
+
         Label dummy;
-        boostPage.Controls.Add(Row(0, "Max Performance", "Max power plan while open", out boostBtn, out boostDesc));
-        boostPage.Controls.Add(Row(60, "FPS Tweaks", "Game Mode, recording off, fast GPU", out fpsBtn, out fpsDesc));
-        boostPage.Controls.Add(Row(120, "Auto-Minimize", "Hides when Roblox is focused", out minBtn, out dummy));
-        boostPage.Controls.Add(Row(180, "Online Update", "", out updBtn, out updDesc));
+        boostPage.Controls.Add(Row(144, "Auto-Minimize", "Hides when Roblox is focused", out minBtn, out dummy));
+        boostPage.Controls.Add(Row(204, "Online Update", "", out updBtn, out updDesc));
         updBtn.Text = "CHECK";
         updBtn.BackColor = Theme.ACCENT;
-
-        fpsBtn.Click += delegate { if (fpsOn) RemoveFps(); else ApplyFps(); RefreshUi(true); SaveSettings(); };
-        boostBtn.Click += delegate { if (boostActive) DisableBoost(); else EnableBoost(); boostOn = boostActive; RefreshUi(true); SaveSettings(); };
         minBtn.Click += delegate { autoMin = !autoMin; RefreshUi(true); SaveSettings(); };
         updBtn.Click += delegate { if (updState == 3) InstallOnline(); else CheckOnline(); };
 
-        updateBtn = Theme.Btn("Rebuild from local .cs", new Rectangle(0, 248, 340, 34), Theme.CHIP, 9.5f);
+        updateBtn = Theme.Btn("Rebuild from local .cs", new Rectangle(0, 272, 340, 32), Theme.CHIP, 9f);
+        updateBtn.ForeColor = Theme.MUTED;
         updateBtn.Click += delegate { DoUpdate(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "BladeBallMacro.cs")); };
         boostPage.Controls.Add(updateBtn);
 
@@ -1024,6 +1040,119 @@ public class MacroForm : Form
         if (!overlay.Visible) overlay.Show();
     }
 
+    // ---------- FPS MODE ----------
+    // Hintergrund-Programme, die niemand zum Spielen braucht -> werden geschlossen
+    static readonly string[] JunkApps = {
+        "onedrive", "ms-teams", "teams", "msteams", "widgets", "phoneexperiencehost", "yourphone",
+        "epicgameslauncher", "epicwebhelper", "eadesktop", "battle.net", "riotclientservices", "riotclientux",
+        "upc", "ubisoftconnect", "overwolf", "medal", "gamebar", "gamebarftserver", "xboxpcapp",
+        "nvidia share", "ccxprocess", "creative cloud", "adobeipcbroker", "coresync", "acrotray",
+        "capcut", "wallpaper32", "wallpaper64", "lively", "copilot", "cortana" };
+
+    // Programme, die offen bleiben, aber weniger CPU bekommen als Roblox
+    static readonly HashSet<string> SlowApps = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
+        "chrome", "msedge", "firefox", "opera", "brave", "vivaldi", "discord", "spotify",
+        "steam", "steamwebhelper", "code", "msedgewebview2" };
+
+    void SetFpsMode(bool on)
+    {
+        fpsMode = on;
+        if (on)
+        {
+            EnableBoost();
+            boostOn = boostActive;
+            ApplyFps();
+            ThreadPool.QueueUserWorkItem(delegate { CloseJunk(); SlowBackground(); });
+        }
+        else
+        {
+            DisableBoost();
+            boostOn = false;
+            RemoveFps();
+            RestoreBackground();
+            closedApps = 0;
+        }
+        RefreshUi(true);
+        SaveSettings();
+    }
+
+    void CloseJunk()
+    {
+        int session, n = 0;
+        using (Process me = Process.GetCurrentProcess()) session = me.SessionId;
+        List<Process> left = new List<Process>();
+        foreach (string name in JunkApps)
+        {
+            foreach (Process p in Process.GetProcessesByName(name))
+            {
+                try
+                {
+                    if (p.SessionId != session) { p.Dispose(); continue; }
+                    if (p.MainWindowHandle != IntPtr.Zero) p.CloseMainWindow();
+                    left.Add(p);
+                    n++;
+                }
+                catch { p.Dispose(); }
+            }
+        }
+        if (left.Count > 0) Thread.Sleep(2000);
+        foreach (Process p in left)
+        {
+            try { if (!p.HasExited) p.Kill(); } catch { }
+            p.Dispose();
+        }
+        closedApps += n;
+    }
+
+    // Senkt die Prioritaet von Hintergrund-Apps (nie Roblox) -> Roblox bekommt die CPU zuerst
+    void SlowBackground()
+    {
+        int session;
+        using (Process me = Process.GetCurrentProcess()) session = me.SessionId;
+        lock (slowLock)
+        {
+            foreach (Process p in Process.GetProcesses())
+            {
+                try
+                {
+                    if (p.SessionId == session && SlowApps.Contains(p.ProcessName) && !slowed.ContainsKey(p.Id))
+                    {
+                        ProcessPriorityClass old = p.PriorityClass;
+                        if (old == ProcessPriorityClass.Normal || old == ProcessPriorityClass.AboveNormal)
+                        {
+                            p.PriorityClass = ProcessPriorityClass.BelowNormal;
+                            slowed[p.Id] = old;
+                        }
+                    }
+                }
+                catch { }
+                finally { p.Dispose(); }
+            }
+            // beendete Prozesse aus der Liste werfen
+            List<int> dead = new List<int>();
+            foreach (int id in slowed.Keys)
+            {
+                try { using (Process p = Process.GetProcessById(id)) { if (p.HasExited) dead.Add(id); } }
+                catch { dead.Add(id); }
+            }
+            foreach (int id in dead) slowed.Remove(id);
+            slowedApps = slowed.Count;
+        }
+    }
+
+    void RestoreBackground()
+    {
+        lock (slowLock)
+        {
+            foreach (KeyValuePair<int, ProcessPriorityClass> kv in slowed)
+            {
+                try { using (Process p = Process.GetProcessById(kv.Key)) p.PriorityClass = kv.Value; } catch { }
+            }
+            slowed.Clear();
+            slowedApps = 0;
+        }
+    }
+
     // ---------- FPS-Tweaks ----------
     const string RK_GAMEBAR = @"Software\Microsoft\GameBar";
     const string RK_GCS = @"System\GameConfigStore";
@@ -1164,16 +1293,18 @@ public class MacroForm : Form
         for (int i = 0; i < 2; i++) SetBack(modeBtns[i], i == mode ? Theme.ACCENT : Theme.CHIP);
         for (int i = 0; i < 4; i++) SetBack(presetBtns[i], i == preset ? Theme.ACCENT : Theme.CHIP);
 
-        SetToggle(boostBtn, boostActive);
-        SetText(boostDesc, boostFailed ? "Not available on this PC" : (boostActive ? "Active – restored when closed" : "Max power plan while open"));
         SetToggle(minBtn, autoMin);
-        SetToggle(fpsBtn, fpsOn);
+        SetText(fpsModeBtn, fpsMode ? "ON" : "OFF");
+        SetBack(fpsModeBtn, fpsMode ? Theme.OK : Theme.CHIP);
+        fpsCard.AccentBar = fpsMode ? Theme.OK : Color.Empty;
+        SetFore(fpsModeList, fpsMode ? Color.FromArgb(200, 200, 220) : Theme.MUTED);
+        SetText(fpsModeInfo, !fpsMode ? "One click for max FPS" :
+            ("Active · " + closedApps + " closed · " + slowedApps + " slowed" + (boostFailed ? " · no power plan" : "")));
         SetToggle(chatBtn, chatProtect);
         SetToggle(ovlBtn, overlayOn);
         SetText(ovlPosBtn, PosArrows[overlayPos]);
         SetToggle(sndBtn, soundOn);
         SetToggle(panicBtn, panicOn);
-        SetText(fpsDesc, fpsOn ? fpsInfo : "Game Mode, recording off, fast GPU");
 
         string pv = presetCps[preset] + "/s · " + PresetHints[preset];
         if (preset == 0) pv = "AUTO " + autoCps + "/s · live";
@@ -1190,6 +1321,11 @@ public class MacroForm : Form
     {
         lock (runLock) { if (!running && periodOn) { timeEndPeriod(1); periodOn = false; } }
         bool robloxFront = RobloxForeground(); // haelt den Cache aktuell -> Hotkey reagiert sofort
+        if (fpsMode && clock.ElapsedMilliseconds - lastSweepMs > 15000)
+        {
+            lastSweepMs = clock.ElapsedMilliseconds;
+            ThreadPool.QueueUserWorkItem(delegate { if (fpsMode) SlowBackground(); });
+        }
         if (robloxFront && !scannedInRoblox && !scanning && !running) { scannedInRoblox = true; StartScan(); }
         if (autoMin && WindowState != FormWindowState.Minimized && robloxFront)
             WindowState = FormWindowState.Minimized;
@@ -1204,6 +1340,7 @@ public class MacroForm : Form
         if (preset == 0) SetText(perfValue, "AUTO " + autoCps + "/s · live");
         SetText(scanText, pcInfo);
         RefreshUpdateRow();
+        if (fpsMode) SetText(fpsModeInfo, "Active · " + closedApps + " closed · " + slowedApps + " slowed" + (boostFailed ? " · no power plan" : ""));
         SetBack(scanBtn, scanning ? Theme.ACCENT : Theme.CHIP);
         SetText(scanBtn, scanning ? "..." : "SCAN");
         if (running) dot.Glow = 50 + (int)(70 * Math.Abs(Math.Sin(clock.ElapsedMilliseconds / 160.0)));
@@ -1635,6 +1772,7 @@ public class MacroForm : Form
                     case "boost": boostOn = v == 1; break;
                     case "automin": autoMin = v == 1; break;
                     case "fps": fpsOn = v == 1; break;
+                    case "fpsmode": fpsModeSaved = v == 1; fpsModeKnown = true; break;
                     case "pgm": prevGameMode = v; break;
                     case "pdvr": prevDvr = v; break;
                     case "pcap": prevCapture = v; break;
@@ -1665,6 +1803,7 @@ public class MacroForm : Form
                 "boost=" + (boostOn ? 1 : 0),
                 "automin=" + (autoMin ? 1 : 0),
                 "fps=" + (fpsOn ? 1 : 0),
+                "fpsmode=" + (fpsMode ? 1 : 0),
                 "pgm=" + prevGameMode,
                 "pdvr=" + prevDvr,
                 "pcap=" + prevCapture,
@@ -1703,12 +1842,33 @@ public class MacroForm : Form
             try
             {
                 ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072; // TLS 1.2
-                string s;
-                using (WebClient wc = new WebClient())
+                string s = null;
+                // 1. GitHub-API: liefert sofort die neueste Version
+                Match u = Regex.Match(UPDATE_URL, @"raw\.githubusercontent\.com/([^/]+)/([^/]+)/([^/]+)/(.+)$");
+                if (u.Success)
                 {
-                    wc.Encoding = Encoding.UTF8;
-                    wc.Headers[HttpRequestHeader.CacheControl] = "no-cache";
-                    s = wc.DownloadString(UPDATE_URL + "?t=" + DateTime.UtcNow.Ticks);
+                    try
+                    {
+                        using (WebClient wc = new WebClient())
+                        {
+                            wc.Encoding = Encoding.UTF8;
+                            wc.Headers[HttpRequestHeader.UserAgent] = "BladeBallMacro";
+                            wc.Headers[HttpRequestHeader.Accept] = "application/vnd.github.raw";
+                            s = wc.DownloadString("https://api.github.com/repos/" + u.Groups[1].Value + "/" + u.Groups[2].Value
+                                + "/contents/" + u.Groups[4].Value + "?ref=" + u.Groups[3].Value);
+                        }
+                    }
+                    catch { s = null; }
+                }
+                // 2. Fallback: Raw-Link (kann bis zu 5 Minuten alt sein)
+                if (s == null)
+                {
+                    using (WebClient wc = new WebClient())
+                    {
+                        wc.Encoding = Encoding.UTF8;
+                        wc.Headers[HttpRequestHeader.CacheControl] = "no-cache";
+                        s = wc.DownloadString(UPDATE_URL + "?t=" + DateTime.UtcNow.Ticks);
+                    }
                 }
                 Match m = Regex.Match(s, @"public const int BUILD = (\d+);");
                 if (!m.Success || s.IndexOf("class MacroForm") < 0) { updState = 4; return; }
@@ -1808,6 +1968,7 @@ public class MacroForm : Form
         if (mhook != IntPtr.Zero) { UnhookWindowsHookEx(mhook); mhook = IntPtr.Zero; }
         if (periodOn) { timeEndPeriod(1); periodOn = false; }
         DisableBoost();
+        RestoreBackground();
         Environment.Exit(0);
     }
 
