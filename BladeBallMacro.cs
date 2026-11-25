@@ -20,16 +20,16 @@ using System.Text;
 [assembly: AssemblyProduct("BladeBall Macro")]
 [assembly: AssemblyCompany("Leo")]
 [assembly: AssemblyCopyright("Leo 2026")]
-[assembly: AssemblyVersion("18.0.0.0")]
-[assembly: AssemblyFileVersion("18.0.0.0")]
+[assembly: AssemblyVersion("19.0.0.0")]
+[assembly: AssemblyFileVersion("19.0.0.0")]
 
 // ================= Design =================
 static class Theme
 {
     public static readonly Color BG = Color.FromArgb(10, 10, 12);      // = durchsichtiges Glas im Hauptfenster
     public static readonly Color CARD = BG;                              // Karten sind Glas, nur die Kante ist sichtbar
-    public static readonly Color GHOST = Color.FromArgb(28, 28, 31);     // dezente Flaeche (bleibt klickbar)
-    public static readonly Color CHIP = Color.FromArgb(44, 44, 48);
+    public static readonly Color GHOST = BG;                             // ohne Flaeche, ohne Kontur
+    public static readonly Color CHIP = BG;                              // Glas-Button: nur feine Kontur
     public static readonly Color ACCENT = Color.FromArgb(242, 242, 245); // Weiss statt Blau
     public static readonly Color OK = Color.FromArgb(52, 211, 125);
     public static readonly Color OFF = Color.FromArgb(235, 87, 87);
@@ -40,12 +40,12 @@ static class Theme
 
     public static Button Btn(string text, Rectangle r, Color c, float size)
     {
-        RoundButton b = new RoundButton { Text = text, Bounds = r, BackColor = c, ForeColor = Color.White, Font = new Font("Segoe UI", size, FontStyle.Bold), Cursor = Cursors.Hand, TabStop = false };
+        RoundButton b = new RoundButton { Text = text, Bounds = r, BackColor = c, ForeColor = Color.White, Font = new Font("Segoe UI", size, FontStyle.Regular), Cursor = Cursors.Hand, TabStop = false };
         return b;
     }
     public static Label Caption(string text, int x, int y)
     {
-        return new Label { Text = text, ForeColor = MUTED, BackColor = CARD, Font = new Font("Segoe UI", 8.5f, FontStyle.Bold), AutoSize = true, Location = new Point(x, y) };
+        return new Label { Text = text, ForeColor = MUTED, BackColor = CARD, Font = new Font("Segoe UI Semibold", 8.5f, FontStyle.Regular), AutoSize = true, Location = new Point(x, y) };
     }
 }
 
@@ -53,7 +53,9 @@ public class RoundButton : Button
 {
     public int Radius = 12;
     public Color HoverColor = Color.Empty;
+    public bool Outline = true;
     bool hover, down;
+    public void SetHover(bool h) { if (hover != h) { hover = h; if (!h) down = false; Invalidate(); } }
     public RoundButton()
     {
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
@@ -79,7 +81,8 @@ public class RoundButton : Button
         g.Clear(surface);
         g.SmoothingMode = SmoothingMode.AntiAlias;
         Color fill = BackColor;
-        if (fill == surface || fill.A == 0) fill = hover ? Shift(surface, 18) : surface;
+        bool glass = fill == surface || fill.A == 0;
+        if (glass) fill = hover ? (HoverColor != Color.Empty ? HoverColor : Shift(surface, 22)) : surface;
         else if (down) fill = Shift(fill, -18);
         else if (hover) fill = HoverColor != Color.Empty ? HoverColor : Shift(fill, 16);
         int r = Math.Min(Radius, Height / 2);
@@ -93,6 +96,8 @@ public class RoundButton : Button
             p.AddArc(rc.X, rc.Bottom - d, d, d, 90, 90);
             p.CloseFigure();
             using (SolidBrush b = new SolidBrush(fill)) g.FillPath(b, p);
+            if (glass && Outline)
+                using (Pen pen = new Pen(Color.FromArgb(hover ? 110 : 70, 255, 255, 255))) g.DrawPath(pen, p);
         }
         double lum = (0.299 * fill.R + 0.587 * fill.G + 0.114 * fill.B) / 255.0;
         Color txt = lum > 0.6 ? Color.FromArgb(18, 18, 20) : ForeColor;
@@ -173,7 +178,7 @@ public static class Glass
     {
         foreach (int state in new int[] { 4, 3 }) // 4 = Acrylic, 3 = einfacher Blur
         {
-            AccentPolicy a = new AccentPolicy { State = state, Flags = 2, Color = 0x990A0A0A }; // AABBGGRR: leicht schwarzes, neutrales Glas
+            AccentPolicy a = new AccentPolicy { State = state, Flags = 2, Color = 0x4A2E2E2E }; // AABBGGRR: helles, neutrales "Liquid Glass"
             int size = Marshal.SizeOf(a);
             IntPtr mem = Marshal.AllocHGlobal(size);
             try
@@ -208,6 +213,29 @@ public class GlassBackdrop : Form
     [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr h, int msg, int w, int l);
     [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr h, int attr, ref int val, int size);
     readonly Form main;
+    RoundButton hot;
+
+    RoundButton HitButton()
+    {
+        Point scr = Cursor.Position;
+        Control c = main;
+        while (true)
+        {
+            Control child = c.GetChildAtPoint(c.PointToClient(scr), GetChildAtPointSkip.Invisible | GetChildAtPointSkip.Disabled);
+            if (child == null) break;
+            c = child;
+        }
+        return c as RoundButton;
+    }
+
+    void SetHot(RoundButton b)
+    {
+        if (hot == b) return;
+        if (hot != null) hot.SetHover(false);
+        hot = b;
+        if (hot != null) hot.SetHover(true);
+        Cursor = hot != null ? Cursors.Hand : Cursors.Default;
+    }
 
     public GlassBackdrop(Form owner)
     {
@@ -221,9 +249,13 @@ public class GlassBackdrop : Form
         MouseDown += delegate(object s, MouseEventArgs e)
         {
             if (e.Button != MouseButtons.Left) return;
+            RoundButton b = HitButton();
+            if (b != null) { b.PerformClick(); return; } // Klick auf einen Glas-Button
             ReleaseCapture();
-            SendMessage(main.Handle, 0xA1, 2, 0);
+            SendMessage(main.Handle, 0xA1, 2, 0);       // sonst: Fenster verschieben
         };
+        MouseMove += delegate { SetHot(HitButton()); };
+        MouseLeave += delegate { SetHot(null); };
     }
 
     protected override bool ShowWithoutActivation { get { return true; } }
@@ -342,7 +374,7 @@ public class OverlayForm : Form
 {
     string text = "";
     Color col = Theme.ACCENT;
-    readonly Font font = new Font("Segoe UI", 9.5f, FontStyle.Bold);
+    readonly Font font = new Font("Segoe UI Semibold", 9.5f, FontStyle.Regular);
     static readonly Color KEY = Color.FromArgb(255, 0, 255);
 
     public OverlayForm()
@@ -444,7 +476,7 @@ public class AppCleanerForm : Form
         Font = new Font("Segoe UI", 10f);
         ShowInTaskbar = false;
 
-        Label title = new Label { Text = "BACKGROUND APPS", Font = new Font("Segoe UI", 13f, FontStyle.Bold), AutoSize = true, Location = new Point(18, 14), BackColor = Theme.BG };
+        Label title = new Label { Text = "BACKGROUND APPS", Font = new Font("Segoe UI Semibold", 13f, FontStyle.Regular), AutoSize = true, Location = new Point(18, 14), BackColor = Theme.BG };
         Button close = Theme.Btn("✕", new Rectangle(316, 10, 34, 30), Theme.BG, 10f);
         close.Click += delegate { Close(); };
         Label sub = new Label { Text = "Apps using the most memory right now", ForeColor = Theme.MUTED, Font = new Font("Segoe UI", 8.5f), AutoSize = true, Location = new Point(20, 42), BackColor = Theme.BG };
@@ -602,7 +634,7 @@ public class KeyForm : Form
         Font = new Font("Segoe UI", 10f);
         TopMost = true;
 
-        Label t1 = new Label { Text = "BLADE BALL", Font = new Font("Segoe UI", 15f, FontStyle.Bold), AutoSize = true, Location = new Point(18, 14), BackColor = Theme.BG };
+        Label t1 = new Label { Text = "BLADE BALL", Font = new Font("Segoe UI Semibold", 15f, FontStyle.Regular), AutoSize = true, Location = new Point(18, 14), BackColor = Theme.BG };
         int w1 = TextRenderer.MeasureText(t1.Text, t1.Font).Width;
         Label t2 = new Label { Text = "MACRO", Font = new Font("Segoe UI Light", 15f, FontStyle.Regular), ForeColor = Theme.TEXT2, AutoSize = true, Location = new Point(14 + w1, 14), BackColor = Theme.BG };
         Button close = Theme.Btn("✕", new Rectangle(296, 10, 34, 30), Theme.BG, 10f);
@@ -645,7 +677,7 @@ public class MacroForm : Form
     public const string ACCESS_KEY = "Hallo";
 
     // Versionsnummer: bei jedem neuen Update um 1 erhoehen
-    public const int BUILD = 18;
+    public const int BUILD = 19;
 
     // >>> Online-Updates fuer Freunde: hier den Raw-Link zu deiner BladeBallMacro.cs auf GitHub eintragen <<<
     // Beispiel: https://raw.githubusercontent.com/DEINNAME/bladeball-macro/main/BladeBallMacro.cs
@@ -870,13 +902,15 @@ public class MacroForm : Form
     {
         Panel bar = new Panel { Bounds = new Rectangle(1, 1, 378, 46), BackColor = Theme.BG };
         PictureBox logo = new PictureBox { Image = AppIcon.Draw(28), Bounds = new Rectangle(18, 9, 28, 28), BackColor = Theme.BG, SizeMode = PictureBoxSizeMode.Normal };
-        Label t1 = new Label { Text = "BLADE BALL", Font = new Font("Segoe UI", 15f, FontStyle.Bold), AutoSize = true, Location = new Point(52, 10), BackColor = Theme.BG };
+        Label t1 = new Label { Text = "BLADE BALL", Font = new Font("Segoe UI Semibold", 15f, FontStyle.Regular), AutoSize = true, Location = new Point(52, 10), BackColor = Theme.BG };
         int w1 = TextRenderer.MeasureText(t1.Text, t1.Font).Width;
         Label t2 = new Label { Text = "MACRO", Font = new Font("Segoe UI Light", 15f, FontStyle.Regular), ForeColor = Theme.TEXT2, AutoSize = true, Location = new Point(48 + w1, 10), BackColor = Theme.BG };
-        Label ver = new Label { Text = "v" + BUILD, ForeColor = Theme.MUTED, Font = new Font("Segoe UI", 8.5f, FontStyle.Bold), AutoSize = true, Location = new Point(52 + w1 + TextRenderer.MeasureText("MACRO", t2.Font).Width, 18), BackColor = Theme.BG };
+        Label ver = new Label { Text = "v" + BUILD, ForeColor = Theme.MUTED, Font = new Font("Segoe UI Semibold", 8.5f, FontStyle.Regular), AutoSize = true, Location = new Point(52 + w1 + TextRenderer.MeasureText("MACRO", t2.Font).Width, 18), BackColor = Theme.BG };
         Button min = Theme.Btn("—", new Rectangle(294, 9, 34, 28), Theme.GHOST, 10f);
         Button close = Theme.Btn("✕", new Rectangle(334, 9, 34, 28), Theme.GHOST, 10f);
         ((RoundButton)close).HoverColor = Theme.OFF;
+        ((RoundButton)close).Outline = false;
+        ((RoundButton)min).Outline = false;
         min.Click += delegate { WindowState = FormWindowState.Minimized; };
         close.Click += delegate { Close(); };
         bar.Controls.AddRange(new Control[] { logo, t1, t2, ver, min, close });
@@ -885,7 +919,7 @@ public class MacroForm : Form
         // Status (immer sichtbar)
         status = new RoundPanel { Bounds = new Rectangle(20, 52, 340, 104) };
         dot = new Dot { Bounds = new Rectangle(18, 22, 18, 18), BackColor = Theme.CARD };
-        statusText = new Label { Font = new Font("Segoe UI", 21f, FontStyle.Bold), BackColor = Theme.CARD, AutoSize = false, Bounds = new Rectangle(40, 10, 190, 42) };
+        statusText = new Label { Font = new Font("Segoe UI Semibold", 21f, FontStyle.Regular), BackColor = Theme.CARD, AutoSize = false, Bounds = new Rectangle(40, 10, 190, 42) };
         hintText = new Label { ForeColor = Theme.TEXT2, BackColor = Theme.CARD, AutoSize = false, Bounds = new Rectangle(18, 54, 310, 22) };
         statsText = new Label { ForeColor = Theme.MUTED, BackColor = Theme.CARD, Font = new Font("Segoe UI", 8.5f), AutoSize = false, Bounds = new Rectangle(18, 76, 310, 20) };
         armBtn = Theme.Btn("ON", new Rectangle(246, 16, 78, 34), Theme.ACCENT, 11f);
@@ -902,6 +936,7 @@ public class MacroForm : Form
         tabMacro.Click += delegate { ShowPage(0); };
         tabBoost.Click += delegate { ShowPage(1); };
         tabExtras.Click += delegate { ShowPage(2); };
+        foreach (Button tb in new Button[] { tabMacro, tabBoost, tabExtras }) ((RoundButton)tb).Outline = false;
         tabs.Controls.AddRange(new Control[] { tabMacro, tabBoost, tabExtras });
 
         // ---------- Seite MACRO ----------
@@ -930,7 +965,7 @@ public class MacroForm : Form
 
         RoundPanel perf = new RoundPanel { Bounds = new Rectangle(0, 172, 340, 96) };
         perf.Controls.Add(Theme.Caption("PERFORMANCE", 16, 12));
-        perfValue = new Label { ForeColor = Theme.ACCENT, BackColor = Theme.CARD, Font = new Font("Segoe UI", 8.5f, FontStyle.Bold), AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Bounds = new Rectangle(120, 8, 204, 22) };
+        perfValue = new Label { ForeColor = Theme.ACCENT, BackColor = Theme.CARD, Font = new Font("Segoe UI Semibold", 8.5f, FontStyle.Regular), AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Bounds = new Rectangle(120, 8, 204, 22) };
         perf.Controls.Add(perfValue);
         for (int i = 0; i < 4; i++)
         {
@@ -951,7 +986,7 @@ public class MacroForm : Form
         // ---------- Seite BOOST ----------
         boostPage = new Panel { Bounds = new Rectangle(20, 222, 340, 340), BackColor = Theme.BG, Visible = false };
         fpsCard = new RoundPanel { Bounds = new Rectangle(0, 0, 340, 132) };
-        Label fpsTitle = new Label { Text = "FPS MODE", Font = new Font("Segoe UI", 15f, FontStyle.Bold), BackColor = Theme.CARD, AutoSize = true, Location = new Point(18, 12) };
+        Label fpsTitle = new Label { Text = "FPS MODE", Font = new Font("Segoe UI Semibold", 15f, FontStyle.Regular), BackColor = Theme.CARD, AutoSize = true, Location = new Point(18, 12) };
         fpsModeInfo = new Label { ForeColor = Theme.MUTED, BackColor = Theme.CARD, Font = new Font("Segoe UI", 8.5f), AutoSize = false, Bounds = new Rectangle(19, 42, 220, 18) };
         fpsModeList = new Label { ForeColor = Theme.TEXT2, BackColor = Theme.CARD, Font = new Font("Segoe UI", 8.5f), AutoSize = false, Bounds = new Rectangle(19, 66, 310, 58),
             Text = "Max power plan  ·  Windows Game Mode\nFast GPU for Roblox  ·  Background recording off\nCloses junk apps  ·  Slows down background apps" };
@@ -1011,7 +1046,7 @@ public class MacroForm : Form
     RoundPanel Row(int y, string title, string desc, out Button toggle, out Label descLabel)
     {
         RoundPanel p = new RoundPanel { Bounds = new Rectangle(0, y, 340, 56) };
-        Label t = new Label { Text = title, Font = new Font("Segoe UI", 10f, FontStyle.Bold), BackColor = Theme.CARD, AutoSize = true, Location = new Point(16, 8) };
+        Label t = new Label { Text = title, Font = new Font("Segoe UI Semibold", 10f, FontStyle.Regular), BackColor = Theme.CARD, AutoSize = true, Location = new Point(16, 8) };
         descLabel = new Label { Text = desc, ForeColor = Theme.MUTED, Font = new Font("Segoe UI", 8.5f), BackColor = Theme.CARD, AutoSize = false, Bounds = new Rectangle(16, 30, 236, 18) };
         toggle = Theme.Btn("OFF", new Rectangle(262, 12, 64, 32), Theme.CHIP, 9.5f);
         ((RoundButton)toggle).Radius = 16;
