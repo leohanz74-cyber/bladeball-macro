@@ -20,8 +20,8 @@ using System.Text;
 [assembly: AssemblyProduct("BladeBall Macro")]
 [assembly: AssemblyCompany("Leo")]
 [assembly: AssemblyCopyright("Leo 2026")]
-[assembly: AssemblyVersion("21.0.0.0")]
-[assembly: AssemblyFileVersion("21.0.0.0")]
+[assembly: AssemblyVersion("22.0.0.0")]
+[assembly: AssemblyFileVersion("22.0.0.0")]
 
 // ================= Design =================
 static class Theme
@@ -790,7 +790,7 @@ public class MacroForm : Form
     public const string ACCESS_KEY = "Hallo";
 
     // Versionsnummer: bei jedem neuen Update um 1 erhoehen
-    public const int BUILD = 21;
+    public const int BUILD = 22;
 
     // >>> Online-Updates fuer Freunde: hier den Raw-Link zu deiner BladeBallMacro.cs auf GitHub eintragen <<<
     // Beispiel: https://raw.githubusercontent.com/DEINNAME/bladeball-macro/main/BladeBallMacro.cs
@@ -903,6 +903,7 @@ public class MacroForm : Form
     volatile int updState = 0; // 0 nichts, 1 prueft, 2 aktuell, 3 Update da, 4 Fehler
     volatile int remoteBuild = 0;
     long lastCheckMs = 0;
+    volatile int autoBest = 120;
 
     // Release Tail, Statistik, Reaktionszeit
     static readonly int[] TailOptions = { 0, 60, 120 };
@@ -1158,10 +1159,7 @@ public class MacroForm : Form
         extrasPage.Controls.Add(ovRow);
         extrasPage.Controls.Add(Row(120, "Sound Feedback", "Beeps on toggle, chat and panic", out sndBtn, out d2));
         extrasPage.Controls.Add(Row(180, "Panic Key (F8)", "F8 turns the whole macro on/off", out panicBtn, out d2));
-        extrasPage.Controls.Add(Row(240, "Background Apps", "Close apps that eat your FPS", out cleanBtn, out d2));
-        cleanBtn.Text = "OPEN";
-        cleanBtn.BackColor = Theme.ACCENT;
-        Button trainer = Theme.Btn("REACTION TRAINER", new Rectangle(0, 302, 340, 38), Theme.CHIP, 10f);
+        Button trainer = Theme.Btn("REACTION TRAINER", new Rectangle(0, 242, 340, 42), Theme.CHIP, 10f);
         trainer.Click += delegate
         {
             using (ReactionForm f = new ReactionForm(reactBest))
@@ -1178,13 +1176,6 @@ public class MacroForm : Form
         ovlPosBtn.Click += delegate { overlayPos = (overlayPos + 1) % 3; RefreshUi(true); SaveSettings(); };
         sndBtn.Click += delegate { soundOn = !soundOn; RefreshUi(true); SaveSettings(); if (soundOn) Play(sndOn); };
         panicBtn.Click += delegate { panicOn = !panicOn; RefreshUi(true); SaveSettings(); };
-        cleanBtn.Click += delegate
-        {
-            using (AppCleanerForm f = new AppCleanerForm())
-            {
-                f.ShowDialog(this);
-            }
-        };
 
         Controls.AddRange(new Control[] { bar, status, tabs, macroPage, boostPage, extrasPage });
     }
@@ -1721,6 +1712,7 @@ public class MacroForm : Form
                 {
                     Interlocked.Exchange(ref runStart, clock.ElapsedTicks);
                     respPending = true;
+                    if (autoCps < autoBest) autoCps = autoBest; // volle Wucht: nicht mit gedrosselter Rate starten
                 }
                 if (!periodOn) { timeBeginPeriod(1); periodOn = true; }
                 go.Set();
@@ -2054,7 +2046,8 @@ public class MacroForm : Form
                 if (++winPresses >= 40)
                 {
                     double ratio = (double)winLate / (40.0 * interval);
-                    if (ratio > 0.30) autoCps = Math.Max(autoFloor, (int)(autoCps * 0.85));
+                    bool warm = clock.ElapsedTicks - Interlocked.Read(ref runStart) > freq * 3 / 10;
+                    if (ratio > 0.30 && warm) autoCps = Math.Max(autoFloor, (int)(autoCps * 0.85));
                     else if (ratio < 0.10) autoCps = Math.Min(autoMax, autoCps + 15);
                     winPresses = 0;
                     winLate = 0;
@@ -2116,6 +2109,7 @@ public class MacroForm : Form
 
         autoFloor = Math.Min(best, cores <= 2 ? 60 : 90);
         autoCps = best;
+        autoBest = best;
         pcInfo = "best: " + best + "/s · " + (hiResTimer ? "hi-res timer" : "std timer") + (RobloxRunning() ? " · in game" : "");
         scanning = false;
     }
