@@ -20,8 +20,8 @@ using System.Text;
 [assembly: AssemblyProduct("BladeBall Macro")]
 [assembly: AssemblyCompany("Leo")]
 [assembly: AssemblyCopyright("Leo 2026")]
-[assembly: AssemblyVersion("22.0.0.0")]
-[assembly: AssemblyFileVersion("22.0.0.0")]
+[assembly: AssemblyVersion("1.0.23.0")]
+[assembly: AssemblyFileVersion("1.0.23.0")]
 
 // ================= Design =================
 static class Theme
@@ -611,119 +611,6 @@ public class AppCleanerForm : Form
     }
 }
 
-// ================= Reaktions-Trainer =================
-// Trainiert den ersten, manuellen Parry: warten bis es gruen wird, dann so schnell wie moeglich druecken.
-public class ReactionForm : Form
-{
-    [DllImport("user32.dll")] static extern bool ReleaseCapture();
-    [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr h, int msg, int w, int l);
-
-    enum S { Idle, Waiting, Go, Result, Early }
-    S state = S.Idle;
-    readonly Stopwatch sw = new Stopwatch();
-    readonly System.Windows.Forms.Timer delay = new System.Windows.Forms.Timer();
-    readonly Random rnd = new Random();
-    readonly List<double> times = new List<double>();
-    double last = 0;
-    public double Best;
-    readonly Font big = new Font("Segoe UI Semibold", 30f, FontStyle.Regular);
-    readonly Font mid = new Font("Segoe UI", 10.5f, FontStyle.Regular);
-    readonly Font small = new Font("Segoe UI", 9f, FontStyle.Regular);
-    Rectangle pad = new Rectangle(20, 56, 320, 210);
-
-    public ReactionForm(double best)
-    {
-        Best = best;
-        Text = "Reaction Trainer";
-        Icon = AppIcon.Make(64);
-        FormBorderStyle = FormBorderStyle.None;
-        ClientSize = new Size(360, 330);
-        StartPosition = FormStartPosition.CenterParent;
-        BackColor = Color.FromArgb(18, 18, 20);
-        ForeColor = Color.White;
-        ShowInTaskbar = false;
-        KeyPreview = true;
-        DoubleBuffered = true;
-
-        Button close = Theme.Btn("✕", new Rectangle(316, 10, 34, 28), Color.FromArgb(18, 18, 20), 10f);
-        ((RoundButton)close).HoverColor = Theme.OFF;
-        ((RoundButton)close).Outline = false;
-        close.Click += delegate { Close(); };
-        Controls.Add(close);
-
-        delay.Tick += delegate { delay.Stop(); state = S.Go; sw.Restart(); Invalidate(); };
-        KeyDown += delegate(object s, KeyEventArgs e) { e.Handled = true; e.SuppressKeyPress = true; if (e.KeyCode == Keys.Escape) Close(); else Hit(); };
-        MouseDown += delegate(object s, MouseEventArgs e)
-        {
-            if (e.Button != MouseButtons.Left) return;
-            if (pad.Contains(e.Location)) Hit();
-            else { ReleaseCapture(); SendMessage(Handle, 0xA1, 2, 0); }
-        };
-    }
-
-    void Hit()
-    {
-        if (state == S.Go)
-        {
-            sw.Stop();
-            last = sw.Elapsed.TotalMilliseconds;
-            times.Add(last);
-            if (Best <= 0 || last < Best) Best = last;
-            state = S.Result;
-        }
-        else if (state == S.Waiting) { delay.Stop(); state = S.Early; }
-        else
-        {
-            state = S.Waiting;
-            delay.Interval = rnd.Next(1400, 4200);
-            delay.Start();
-        }
-        Invalidate();
-    }
-
-    protected override void OnPaint(PaintEventArgs e)
-    {
-        Graphics g = e.Graphics;
-        g.SmoothingMode = SmoothingMode.AntiAlias;
-        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
-        using (GraphicsPath b = Glass.Rounded(new Rectangle(0, 0, Width - 1, Height - 1), 12))
-        using (Pen p = new Pen(Color.FromArgb(60, 255, 255, 255))) g.DrawPath(p, b);
-        TextRenderer.DrawText(g, "REACTION TRAINER", new Font("Segoe UI Semibold", 12f), new Point(20, 16), Color.White);
-
-        Color fill; string head, sub;
-        switch (state)
-        {
-            case S.Waiting: fill = Color.FromArgb(120, 40, 40); head = "Wait..."; sub = "Press when it turns green"; break;
-            case S.Go: fill = Color.FromArgb(40, 170, 100); head = "NOW!"; sub = "Any key or click"; break;
-            case S.Early: fill = Color.FromArgb(60, 60, 66); head = "Too early"; sub = "Click or press any key to retry"; break;
-            case S.Result: fill = Color.FromArgb(44, 44, 50); head = last.ToString("0") + " ms"; sub = Rate(last) + "  ·  click to go again"; break;
-            default: fill = Color.FromArgb(44, 44, 50); head = "Start"; sub = "Click or press any key"; break;
-        }
-        using (GraphicsPath p = Glass.Rounded(pad, 16))
-        using (SolidBrush b = new SolidBrush(fill)) g.FillPath(b, p);
-        StringFormat c = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-        g.DrawString(head, big, Brushes.White, new RectangleF(pad.X, pad.Y, pad.Width, pad.Height - 40), c);
-        using (SolidBrush sb = new SolidBrush(Color.FromArgb(215, 215, 220)))
-            g.DrawString(sub, mid, sb, new RectangleF(pad.X, pad.Bottom - 64, pad.Width, 30), c);
-
-        double avg = 0;
-        int n = Math.Min(5, times.Count);
-        for (int i = times.Count - n; i < times.Count; i++) avg += times[i];
-        if (n > 0) avg /= n;
-        string stats = "Best " + (Best > 0 ? Best.ToString("0") + " ms" : "—") + "     Avg (last 5) " + (n > 0 ? avg.ToString("0") + " ms" : "—");
-        using (SolidBrush sb = new SolidBrush(Theme.MUTED))
-            g.DrawString(stats, small, sb, new RectangleF(0, 282, Width, 24), c);
-    }
-
-    static string Rate(double ms)
-    {
-        if (ms < 170) return "insane";
-        if (ms < 210) return "great";
-        if (ms < 260) return "good";
-        return "keep training";
-    }
-}
-
 // ================= Key-Abfrage =================
 public class KeyForm : Form
 {
@@ -790,7 +677,8 @@ public class MacroForm : Form
     public const string ACCESS_KEY = "Hallo";
 
     // Versionsnummer: bei jedem neuen Update um 1 erhoehen
-    public const int BUILD = 22;
+    public const int BUILD = 23;              // intern fuer Updates, immer +1
+    public const string VERSION_NAME = "1.0"; // angezeigte Version
 
     // >>> Online-Updates fuer Freunde: hier den Raw-Link zu deiner BladeBallMacro.cs auf GitHub eintragen <<<
     // Beispiel: https://raw.githubusercontent.com/DEINNAME/bladeball-macro/main/BladeBallMacro.cs
@@ -843,7 +731,8 @@ public class MacroForm : Form
     static readonly string[] PresetHints = { "scans your PC", "low-end PCs", "strong PCs", "high-end only" };
     int[] presetCps = { 120, 60, 240, 1000 };
 
-    Keys spamKey = Keys.F, hotKey = Keys.E;
+    Keys spamKey = Keys.F, hotKey = Keys.E, hotKey2 = Keys.None;
+    volatile bool hd1 = false, hd2 = false; // welcher Hotkey gerade gehalten wird
     volatile int mode = 0;       // 0 Halten, 1 Umschalten
     volatile int preset = 0;     // AUTO
     volatile bool onlyRoblox = true;
@@ -902,21 +791,19 @@ public class MacroForm : Form
     bool fpsModeSaved = false, fpsModeKnown = false;
     volatile int updState = 0; // 0 nichts, 1 prueft, 2 aktuell, 3 Update da, 4 Fehler
     volatile int remoteBuild = 0;
+    string remoteName = "";
     long lastCheckMs = 0;
     volatile int autoBest = 120;
 
-    // Release Tail, Statistik, Reaktionszeit
-    static readonly int[] TailOptions = { 0, 60, 120 };
-    volatile int tailIdx = 0;
-    long tailUntil = 0;
+    // Statistik, Reaktionszeit
     long pressTick = 0;
     volatile bool respPending = false;
     double respMs = -1;
     int clashes = 0;
-    double bestClash = 0, reactBest = 0;
+    double bestClash = 0;
     long ovLastCount = 0, ovLastMs = 0;
     int ovRate = 0;
-    Button[] tailBtns = new Button[3];
+    Button hot2Chip;
     string remoteSrc = null;
     bool fpsOn = false;
     int prevGameMode = -2, prevDvr = -2, prevCapture = -2; // -2 = noch nicht gesichert, -1 = war nicht gesetzt
@@ -1032,7 +919,7 @@ public class MacroForm : Form
         Label t1 = new Label { Text = "BLADE BALL", Font = new Font("Segoe UI Semibold", 15f, FontStyle.Regular), AutoSize = true, Location = new Point(52, 10), BackColor = Theme.BG };
         int w1 = TextRenderer.MeasureText(t1.Text, t1.Font).Width;
         Label t2 = new Label { Text = "MACRO", Font = new Font("Segoe UI Light", 15f, FontStyle.Regular), ForeColor = Theme.TEXT2, AutoSize = true, Location = new Point(48 + w1, 10), BackColor = Theme.BG };
-        Label ver = new Label { Text = "v" + BUILD, ForeColor = Theme.MUTED, Font = new Font("Segoe UI Semibold", 8.5f, FontStyle.Regular), AutoSize = true, Location = new Point(52 + w1 + TextRenderer.MeasureText("MACRO", t2.Font).Width, 18), BackColor = Theme.BG };
+        Label ver = new Label { Text = "v" + VERSION_NAME, ForeColor = Theme.MUTED, Font = new Font("Segoe UI Semibold", 8.5f, FontStyle.Regular), AutoSize = true, Location = new Point(52 + w1 + TextRenderer.MeasureText("MACRO", t2.Font).Width, 18), BackColor = Theme.BG };
         Button min = Theme.Btn("—", new Rectangle(294, 9, 34, 28), Theme.GHOST, 10f);
         Button close = Theme.Btn("✕", new Rectangle(334, 9, 34, 28), Theme.GHOST, 10f);
         ((RoundButton)close).HoverColor = Theme.OFF;
@@ -1104,22 +991,15 @@ public class MacroForm : Form
             perf.Controls.Add(presetBtns[i]);
         }
 
-        RoundPanel tailCard = new RoundPanel { Bounds = new Rectangle(0, 280, 340, 60) };
-        tailCard.Controls.Add(Theme.Caption("RELEASE TAIL", 16, 12));
-        scanText = new Label { Text = "after you let go", ForeColor = Theme.MUTED, BackColor = Theme.CARD, Font = new Font("Segoe UI", 8f), AutoSize = false, Bounds = new Rectangle(16, 32, 120, 18) };
-        tailCard.Controls.Add(scanText);
-        string[] tailNames = { "OFF", "60 ms", "120 ms" };
-        for (int i = 0; i < 3; i++)
-        {
-            int idx = i;
-            tailBtns[i] = Theme.Btn(tailNames[i], new Rectangle(140 + i * 64, 12, 60, 36), Theme.CHIP, 9f);
-            ((RoundButton)tailBtns[i]).Outline = false;
-            tailBtns[i].Click += delegate { tailIdx = idx; RefreshUi(true); SaveSettings(); };
-            tailCard.Controls.Add(tailBtns[i]);
-        }
+        RoundPanel h2Card = new RoundPanel { Bounds = new Rectangle(0, 280, 340, 60) };
+        h2Card.Controls.Add(Theme.Caption("2ND HOTKEY", 16, 12));
+        scanText = new Label { Text = "e.g. mouse side button", ForeColor = Theme.MUTED, BackColor = Theme.CARD, Font = new Font("Segoe UI", 8f), AutoSize = false, Bounds = new Rectangle(16, 32, 160, 18) };
+        hot2Chip = Theme.Btn("NONE", new Rectangle(190, 12, 136, 36), Theme.CHIP, 11f);
+        hot2Chip.Click += delegate { StartCapture(3); };
+        h2Card.Controls.AddRange(new Control[] { scanText, hot2Chip });
         perfValue.Cursor = Cursors.Hand;
         perfValue.Click += delegate { StartScan(); };
-        macroPage.Controls.AddRange(new Control[] { modeCard, hc, sc, perf, tailCard });
+        macroPage.Controls.AddRange(new Control[] { modeCard, hc, sc, perf, h2Card });
 
         // ---------- Seite BOOST ----------
         boostPage = new Panel { Bounds = new Rectangle(20, 222, 340, 340), BackColor = Theme.BG, Visible = false };
@@ -1159,17 +1039,6 @@ public class MacroForm : Form
         extrasPage.Controls.Add(ovRow);
         extrasPage.Controls.Add(Row(120, "Sound Feedback", "Beeps on toggle, chat and panic", out sndBtn, out d2));
         extrasPage.Controls.Add(Row(180, "Panic Key (F8)", "F8 turns the whole macro on/off", out panicBtn, out d2));
-        Button trainer = Theme.Btn("REACTION TRAINER", new Rectangle(0, 242, 340, 42), Theme.CHIP, 10f);
-        trainer.Click += delegate
-        {
-            using (ReactionForm f = new ReactionForm(reactBest))
-            {
-                f.ShowDialog(this);
-                reactBest = f.Best;
-                SaveSettings();
-            }
-        };
-        extrasPage.Controls.Add(trainer);
 
         chatBtn.Click += delegate { chatProtect = !chatProtect; chatOpen = false; RefreshUi(true); SaveSettings(); };
         ovlBtn.Click += delegate { overlayOn = !overlayOn; RefreshUi(true); SaveSettings(); };
@@ -1614,7 +1483,6 @@ public class MacroForm : Form
         SetBack(armBtn, armed ? Theme.ACCENT : Theme.CHIP);
         for (int i = 0; i < 2; i++) SetBack(modeBtns[i], i == mode ? Theme.ACCENT : Theme.CHIP);
         for (int i = 0; i < 4; i++) SetBack(presetBtns[i], i == preset ? Theme.ACCENT : Theme.CHIP);
-        for (int i = 0; i < 3; i++) SetBack(tailBtns[i], i == tailIdx ? Theme.ACCENT : Theme.CHIP);
 
         SetToggle(minBtn, autoMin);
         SetText(fpsModeBtn, fpsMode ? "ON" : "OFF");
@@ -1633,9 +1501,10 @@ public class MacroForm : Form
         if (preset == 0) pv = scanning ? "scanning..." : "AUTO " + autoCps + "/s · rescan";
         SetText(perfValue, pv);
         if (captureTarget != 2) SetText(hotChip, KeyName(hotKey));
+        if (captureTarget != 3) SetText(hot2Chip, hotKey2 == Keys.None ? "NONE" : KeyName(hotKey2));
         if (captureTarget != 1) SetText(spamChip, KeyName(spamKey));
 
-        string h = KeyName(hotKey), s = KeyName(spamKey);
+        string h = KeyName(hotKey) + (hotKey2 != Keys.None ? "/" + KeyName(hotKey2) : ""), s = KeyName(spamKey);
         if (mode == 0) SetText(hintText, "Hold " + h + " → spams " + s);
         else SetText(hintText, "Press " + h + " → toggles " + s + " spam");
     }
@@ -1674,7 +1543,7 @@ public class MacroForm : Form
         }
         if (updState == 3)
         {
-            SetText(statsText, "⬆  v" + remoteBuild + " available – click here to update");
+            SetText(statsText, "⬆  v" + remoteName + " available – click here to update");
             SetFore(statsText, Theme.OK);
             statsText.Cursor = Cursors.Hand;
             return;
@@ -1707,7 +1576,6 @@ public class MacroForm : Form
             running = on;
             if (on)
             {
-                Interlocked.Exchange(ref tailUntil, 0);
                 if (!was)
                 {
                     Interlocked.Exchange(ref runStart, clock.ElapsedTicks);
@@ -1726,7 +1594,7 @@ public class MacroForm : Form
         }
     }
 
-    // Vom Spam-Thread aus stoppen (Tail abgelaufen / Loslassen verpasst)
+    // Vom Spam-Thread aus stoppen (Loslassen verpasst)
     void StopFromWorker()
     {
         lock (runLock)
@@ -1747,7 +1615,7 @@ public class MacroForm : Form
     }
 
     void SetArmed(bool on) { armed = on; if (!on) SetRunning(false); Play(on ? sndOn : sndOff); RefreshUi(true); }
-    void SetMode(int m) { mode = m; hotDown = false; SetRunning(false); RefreshUi(true); SaveSettings(); }
+    void SetMode(int m) { mode = m; hotDown = false; hd1 = hd2 = false; SetRunning(false); RefreshUi(true); SaveSettings(); }
 
     void StartCapture(int target)
     {
@@ -1755,6 +1623,7 @@ public class MacroForm : Form
         captureTarget = target;
         capturing = true;
         if (target == 1) spamChip.Text = "...";
+        else if (target == 3) hot2Chip.Text = "...";
         else hotChip.Text = "...";
         ActiveControl = null;
         Focus();
@@ -1766,10 +1635,12 @@ public class MacroForm : Form
         e.SuppressKeyPress = true;
         e.Handled = true;
         Keys k = e.KeyCode;
-        if (k != Keys.Escape && k != Keys.ShiftKey && k != Keys.ControlKey && k != Keys.Menu)
+        if (captureTarget == 3 && (k == Keys.Back || k == Keys.Delete)) hotKey2 = Keys.None; // Entf/Backspace = kein 2. Hotkey
+        else if (k != Keys.Escape && k != Keys.ShiftKey && k != Keys.ControlKey && k != Keys.Menu)
         {
-            if (captureTarget == 1) { if (k != hotKey) { spamKey = k; RebuildKeys(); } }
-            else if (k != spamKey) hotKey = k;
+            if (captureTarget == 1) { if (k != hotKey && k != hotKey2) { spamKey = k; RebuildKeys(); } }
+            else if (captureTarget == 3) { if (k != spamKey && k != hotKey) hotKey2 = k; }
+            else if (k != spamKey && k != hotKey2) hotKey = k;
         }
         captureTarget = 0;
         capturing = false;
@@ -1811,10 +1682,13 @@ public class MacroForm : Form
         while (GetMessage(out m, IntPtr.Zero, 0, 0) > 0) { }
     }
 
-    void HandleHot(bool down, bool up)
+    void HandleHot(int which, bool down, bool up)
     {
-        if (down && !hotDown)
+        bool before = hd1 || hd2;
+        if (down)
         {
+            if (which == 1) { if (hd1) return; hd1 = true; } else { if (hd2) return; hd2 = true; }
+            if (before) return; // anderer Hotkey haelt schon
             hotDown = true;
             Interlocked.Exchange(ref pressTick, clock.ElapsedTicks);
             if (chatOpen) return; // tippst gerade im Chat
@@ -1826,13 +1700,10 @@ public class MacroForm : Form
         }
         else if (up)
         {
+            if (which == 1) hd1 = false; else hd2 = false;
+            if (hd1 || hd2) return; // anderer Hotkey haelt noch
             hotDown = false;
-            if (mode == 0)
-            {
-                int tail = TailOptions[tailIdx];
-                if (tail > 0 && running) Interlocked.Exchange(ref tailUntil, clock.ElapsedTicks + tail * Stopwatch.Frequency / 1000);
-                else SetRunning(false);
-            }
+            if (mode == 0) SetRunning(false);
         }
     }
 
@@ -1865,10 +1736,12 @@ public class MacroForm : Form
                     else if (chatOpen && (vk == 0x0D || vk == 0x1B)) chatOpen = false;
                 }
             }
+            if ((flags & 0x10) == 0 && hotKey2 != Keys.None && vk == (uint)hotKey2)
+                HandleHot(2, kdown, kmsg == 0x101 || kmsg == 0x105);
             if ((flags & 0x10) == 0 && vk == (uint)hotKey)
             {
                 int msg = w.ToInt32();
-                HandleHot(msg == 0x100 || msg == 0x104, msg == 0x101 || msg == 0x105);
+                HandleHot(1, msg == 0x100 || msg == 0x104, msg == 0x101 || msg == 0x105);
             }
         }
         return CallNextHookEx(hook, n, w, l);
@@ -1911,17 +1784,19 @@ public class MacroForm : Form
                 }
                 if (btn != Keys.None)
                 {
-                    if (capturing && captureTarget == 2)
+                    if (capturing && (captureTarget == 2 || captureTarget == 3))
                     {
                         if (down)
                         {
-                            hotKey = btn;
+                            if (captureTarget == 2) { if (btn != hotKey2) hotKey = btn; }
+                            else if (btn != hotKey) hotKey2 = btn;
                             capturing = false;
                             BeginInvoke((MethodInvoker)delegate { captureTarget = 0; RefreshUi(true); SaveSettings(); });
                         }
                         return (IntPtr)1;
                     }
-                    if (!capturing && btn == hotKey) HandleHot(down, !down);
+                    if (!capturing && btn == hotKey) HandleHot(1, down, !down);
+                    else if (!capturing && hotKey2 != Keys.None && btn == hotKey2) HandleHot(2, down, !down);
                 }
             }
         }
@@ -1998,17 +1873,13 @@ public class MacroForm : Form
             go.Wait(); // 0 % CPU, solange nichts passiert
             if (!running) continue;
 
-            long tu = Interlocked.Read(ref tailUntil);
-            if (tu > 0 && clock.ElapsedTicks >= tu)
-            {
-                StopFromWorker(); // Release Tail vorbei
-                continue;
-            }
-            if (mode == 0 && tu == 0 && clock.ElapsedTicks - Interlocked.Read(ref runStart) > freq / 20
-                && (GetAsyncKeyState((int)hotKey) & 0x8000) == 0)
+            if (mode == 0 && clock.ElapsedTicks - Interlocked.Read(ref runStart) > freq / 20
+                && (GetAsyncKeyState((int)hotKey) & 0x8000) == 0
+                && (hotKey2 == Keys.None || (GetAsyncKeyState((int)hotKey2) & 0x8000) == 0))
             {
                 // Loslassen wurde verpasst (z. B. Alt+Tab, Windows-Popup) -> sicher stoppen
                 hotDown = false;
+                hd1 = hd2 = false;
                 StopFromWorker();
                 continue;
             }
@@ -2152,8 +2023,7 @@ public class MacroForm : Form
                     case "ovlpos2": if (v >= 0 && v <= 2) overlayPos = v; break;
                     case "snd": soundOn = v == 1; break;
                     case "panic": panicOn = v == 1; break;
-                    case "tail": if (v >= 0 && v <= 2) tailIdx = v; break;
-                    case "react": if (v > 0) reactBest = v; break;
+                    case "hot2": hotKey2 = (Keys)v; break;
                     case "wx": winX = v; break;
                     case "wy": winY = v; break;
 
@@ -2185,8 +2055,7 @@ public class MacroForm : Form
                 "ovlpos2=" + overlayPos,
                 "snd=" + (soundOn ? 1 : 0),
                 "panic=" + (panicOn ? 1 : 0),
-                "tail=" + tailIdx,
-                "react=" + (int)reactBest,
+                "hot2=" + (int)hotKey2,
                 "wx=" + winX,
                 "wy=" + winY
             });
@@ -2248,6 +2117,8 @@ public class MacroForm : Form
                 Match m = Regex.Match(s, @"public const int BUILD = (\d+);");
                 if (!m.Success || s.IndexOf("class MacroForm") < 0) { updState = 4; return; }
                 remoteBuild = int.Parse(m.Groups[1].Value);
+                Match vn = Regex.Match(s, "VERSION_NAME = \"([^\"]+)\"");
+                remoteName = vn.Success ? vn.Groups[1].Value : remoteBuild.ToString();
                 if (remoteBuild > BUILD) { remoteSrc = s; updState = 3; }
                 else updState = 2;
             }
@@ -2280,10 +2151,10 @@ public class MacroForm : Form
         string d;
         if (UPDATE_URL.Length == 0) d = "Not set up yet (see code)";
         else if (updState == 1) d = "Checking...";
-        else if (updState == 2) d = "v" + BUILD + " · up to date";
-        else if (updState == 3) d = "v" + remoteBuild + " available!";
+        else if (updState == 2) d = "v" + VERSION_NAME + " · up to date";
+        else if (updState == 3) d = "v" + remoteName + " available!";
         else if (updState == 4) d = "Check failed – try again";
-        else d = "v" + BUILD + " installed";
+        else d = "v" + VERSION_NAME + " installed";
         SetText(updDesc, d);
         SetText(updBtn, updState == 3 ? "UPDATE" : (updState == 1 ? "..." : "CHECK"));
         SetBack(updBtn, updState == 3 ? Theme.OK : (UPDATE_URL.Length == 0 ? Theme.CHIP : Theme.ACCENT));
