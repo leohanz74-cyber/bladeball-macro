@@ -20,15 +20,15 @@ using System.Text;
 [assembly: AssemblyProduct("BladeBall Macro")]
 [assembly: AssemblyCompany("Leo")]
 [assembly: AssemblyCopyright("Leo 2026")]
-[assembly: AssemblyVersion("16.0.0.0")]
-[assembly: AssemblyFileVersion("16.0.0.0")]
+[assembly: AssemblyVersion("17.0.0.0")]
+[assembly: AssemblyFileVersion("17.0.0.0")]
 
 // ================= Design =================
 static class Theme
 {
-    public static readonly Color BG = Color.FromArgb(12, 12, 18);
-    public static readonly Color CARD = Color.FromArgb(24, 24, 34);
-    public static readonly Color CHIP = Color.FromArgb(36, 36, 52);
+    public static readonly Color BG = Color.FromArgb(10, 11, 17);     // im Hauptfenster durchsichtig (Glas)
+    public static readonly Color CARD = Color.FromArgb(27, 30, 44);
+    public static readonly Color CHIP = Color.FromArgb(46, 51, 72);
     public static readonly Color ACCENT = Color.FromArgb(0, 168, 255);
     public static readonly Color OK = Color.FromArgb(40, 205, 130);
     public static readonly Color OFF = Color.FromArgb(240, 84, 96);
@@ -49,7 +49,8 @@ static class Theme
 
 public class RoundButton : Button
 {
-    public int Radius = 10;
+    public int Radius = 12;
+    public Color HoverColor = Color.Empty;
     bool hover, down;
     public RoundButton()
     {
@@ -78,7 +79,7 @@ public class RoundButton : Button
         Color fill = BackColor;
         if (fill == surface || fill.A == 0) fill = hover ? Shift(surface, 18) : surface;
         else if (down) fill = Shift(fill, -18);
-        else if (hover) fill = Shift(fill, 16);
+        else if (hover) fill = HoverColor != Color.Empty ? HoverColor : Shift(fill, 16);
         int r = Math.Min(Radius, Height / 2);
         int d = r * 2;
         Rectangle rc = new Rectangle(0, 0, Width - 1, Height - 1);
@@ -99,7 +100,7 @@ public class RoundPanel : Panel
 {
     public Color Fill = Theme.CARD;
     public Color Border = Theme.EDGE;
-    public int Radius = 14;
+    public int Radius = 16;
     Color accent = Color.Empty;
     public Color AccentBar { get { return accent; } set { if (accent != value) { accent = value; Invalidate(); } } }
     public RoundPanel() { DoubleBuffered = true; BackColor = Theme.BG; }
@@ -116,7 +117,11 @@ public class RoundPanel : Panel
             p.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
             p.CloseFigure();
             using (SolidBrush b = new SolidBrush(Fill)) e.Graphics.FillPath(b, p);
-            using (Pen pen = new Pen(accent != Color.Empty ? Color.FromArgb(90, accent) : Border)) e.Graphics.DrawPath(pen, p);
+            if (accent != Color.Empty)
+                using (Pen pen = new Pen(Color.FromArgb(110, accent))) e.Graphics.DrawPath(pen, p);
+            else
+                using (LinearGradientBrush lb = new LinearGradientBrush(new Rectangle(0, 0, Width, Height), Color.FromArgb(75, 255, 255, 255), Color.FromArgb(12, 255, 255, 255), 90f))
+                using (Pen pen = new Pen(lb, 1f)) e.Graphics.DrawPath(pen, p); // Glas-Kante: oben hell, unten fast weg
         }
         if (accent != Color.Empty)
             using (SolidBrush ab = new SolidBrush(accent)) e.Graphics.FillRectangle(ab, 0, Radius, 4, Height - Radius * 2);
@@ -136,6 +141,111 @@ public class Dot : Control
         e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
         using (SolidBrush glow = new SolidBrush(Color.FromArgb(glowA, c))) e.Graphics.FillEllipse(glow, 0, 0, Width - 1, Height - 1);
         using (SolidBrush b = new SolidBrush(c)) e.Graphics.FillEllipse(b, 3, 3, Width - 7, Height - 7);
+    }
+}
+
+// ================= Glas =================
+public static class Glass
+{
+    [StructLayout(LayoutKind.Sequential)] struct AccentPolicy { public int State; public int Flags; public uint Color; public int Anim; }
+    [StructLayout(LayoutKind.Sequential)] struct CompData { public int Attr; public IntPtr Data; public int Size; }
+    [DllImport("user32.dll")] static extern int SetWindowCompositionAttribute(IntPtr h, ref CompData d);
+
+    public static bool IsWin11()
+    {
+        try
+        {
+            using (Microsoft.Win32.RegistryKey k = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion"))
+            {
+                int b;
+                return k != null && int.TryParse(k.GetValue("CurrentBuildNumber") as string, out b) && b >= 22000;
+            }
+        }
+        catch { return false; }
+    }
+
+    // Weichzeichner hinter dem Fenster (Win10/11). Faellt bei alten Systemen still auf "kein Effekt" zurueck.
+    public static bool Blur(IntPtr h)
+    {
+        foreach (int state in new int[] { 4, 3 }) // 4 = Acrylic, 3 = einfacher Blur
+        {
+            AccentPolicy a = new AccentPolicy { State = state, Flags = 2, Color = 0x99140B0A }; // AABBGGRR: dunkles Blau-Schwarz
+            int size = Marshal.SizeOf(a);
+            IntPtr mem = Marshal.AllocHGlobal(size);
+            try
+            {
+                Marshal.StructureToPtr(a, mem, false);
+                CompData d = new CompData { Attr = 19, Data = mem, Size = size };
+                if (SetWindowCompositionAttribute(h, ref d) != 0) return true;
+            }
+            catch { }
+            finally { Marshal.FreeHGlobal(mem); }
+        }
+        return false;
+    }
+
+    public static GraphicsPath Rounded(Rectangle r, int radius)
+    {
+        int d = radius * 2;
+        GraphicsPath p = new GraphicsPath();
+        p.AddArc(r.X, r.Y, d, d, 180, 90);
+        p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+        p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+        p.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+        p.CloseFigure();
+        return p;
+    }
+}
+
+// Unsichtbares Fenster direkt hinter dem Macro: liefert den Milchglas-Hintergrund
+public class GlassBackdrop : Form
+{
+    [DllImport("user32.dll")] static extern bool ReleaseCapture();
+    [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr h, int msg, int w, int l);
+    [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr h, int attr, ref int val, int size);
+    readonly Form main;
+
+    public GlassBackdrop(Form owner)
+    {
+        main = owner;
+        FormBorderStyle = FormBorderStyle.None;
+        ShowInTaskbar = false;
+        StartPosition = FormStartPosition.Manual;
+        BackColor = Color.Black;
+        Text = "";
+        // Klicks in die Glas-Luecken verschieben das Macro-Fenster
+        MouseDown += delegate(object s, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Left) return;
+            ReleaseCapture();
+            SendMessage(main.Handle, 0xA1, 2, 0);
+        };
+    }
+
+    protected override bool ShowWithoutActivation { get { return true; } }
+
+    protected override CreateParams CreateParams
+    {
+        get
+        {
+            CreateParams cp = base.CreateParams;
+            cp.ExStyle |= 0x80 | 0x08000000; // TOOLWINDOW | NOACTIVATE
+            return cp;
+        }
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        Glass.Blur(Handle);
+        try { int v = 2; DwmSetWindowAttribute(Handle, 33, ref v, 4); } catch { } // runde Ecken (Win11)
+    }
+
+    protected override void OnSizeChanged(EventArgs e)
+    {
+        base.OnSizeChanged(e);
+        if (!Glass.IsWin11() && Width > 0)
+            using (GraphicsPath p = Glass.Rounded(new Rectangle(0, 0, Width, Height), 12)) Region = new Region(p);
     }
 }
 
@@ -531,7 +641,7 @@ public class MacroForm : Form
     public const string ACCESS_KEY = "Hallo";
 
     // Versionsnummer: bei jedem neuen Update um 1 erhoehen
-    public const int BUILD = 16;
+    public const int BUILD = 17;
 
     // >>> Online-Updates fuer Freunde: hier den Raw-Link zu deiner BladeBallMacro.cs auf GitHub eintragen <<<
     // Beispiel: https://raw.githubusercontent.com/DEINNAME/bladeball-macro/main/BladeBallMacro.cs
@@ -650,6 +760,8 @@ public class MacroForm : Form
     string fpsInfo = "";
     Panel macroPage, boostPage, extrasPage;
     RoundPanel status;
+    GlassBackdrop backdrop;
+    [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
     Button tabExtras, chatBtn, ovlBtn, ovlPosBtn, sndBtn, panicBtn, cleanBtn;
 
     // Extras
@@ -689,7 +801,16 @@ public class MacroForm : Form
         RebuildKeys();
         RefreshUi(true);
 
-        try { int v = 2; DwmSetWindowAttribute(Handle, 33, ref v, 4); } catch { }
+        // Glas: Hintergrund komplett durchsichtig, Karten leicht durchscheinend
+        TransparencyKey = Theme.BG;
+        Opacity = 0.93;
+        backdrop = new GlassBackdrop(this);
+        if (!Glass.IsWin11())
+            using (GraphicsPath rp = Glass.Rounded(new Rectangle(0, 0, Width, Height), 12)) Region = new Region(rp);
+        LocationChanged += delegate { SyncGlass(); };
+        SizeChanged += delegate { SyncGlass(); };
+        Activated += delegate { SyncGlass(); };
+        Shown += delegate { SyncGlass(); };
         // FPS MODE fasst Energieplan + FPS-Tweaks zusammen (alte Einstellungen werden uebernommen)
         bool startFps = fpsModeKnown ? fpsModeSaved : (boostOn || fpsOn);
         if (fpsOn && !startFps) RemoveFps();
@@ -750,10 +871,9 @@ public class MacroForm : Form
         int w1 = TextRenderer.MeasureText(t1.Text, t1.Font).Width;
         Label t2 = new Label { Text = "MACRO", Font = new Font("Segoe UI", 15f, FontStyle.Bold), ForeColor = Theme.ACCENT, AutoSize = true, Location = new Point(48 + w1, 10), BackColor = Theme.BG };
         Label ver = new Label { Text = "v" + BUILD, ForeColor = Theme.MUTED, Font = new Font("Segoe UI", 8.5f, FontStyle.Bold), AutoSize = true, Location = new Point(52 + w1 + TextRenderer.MeasureText("MACRO", t2.Font).Width, 18), BackColor = Theme.BG };
-        Button min = Theme.Btn("—", new Rectangle(296, 8, 36, 30), Theme.BG, 10f);
-        Button close = Theme.Btn("✕", new Rectangle(334, 8, 36, 30), Theme.BG, 10f);
-        min.FlatAppearance.MouseOverBackColor = Theme.CHIP;
-        close.FlatAppearance.MouseOverBackColor = Theme.OFF;
+        Button min = Theme.Btn("—", new Rectangle(294, 9, 34, 28), Color.FromArgb(24, 27, 40), 10f);
+        Button close = Theme.Btn("✕", new Rectangle(334, 9, 34, 28), Color.FromArgb(24, 27, 40), 10f);
+        ((RoundButton)close).HoverColor = Theme.OFF;
         min.Click += delegate { WindowState = FormWindowState.Minimized; };
         close.Click += delegate { Close(); };
         bar.Controls.AddRange(new Control[] { logo, t1, t2, ver, min, close });
@@ -1263,10 +1383,26 @@ public class MacroForm : Form
         SendMessage(Handle, 0xA1, 2, 0);
     }
 
+    // Glas-Fenster immer genau hinter dem Macro halten; minimiert = aus (kostet dann nichts)
+    void SyncGlass()
+    {
+        if (backdrop == null) return;
+        if (WindowState == FormWindowState.Minimized || !Visible)
+        {
+            if (backdrop.Visible) backdrop.Hide();
+            return;
+        }
+        if (!backdrop.Visible) backdrop.Show();
+        SetWindowPos(backdrop.Handle, Handle, Left, Top, Width, Height, 0x0010); // SWP_NOACTIVATE, direkt hinter dem Macro
+    }
+
     protected override void OnPaint(PaintEventArgs e)
     {
         base.OnPaint(e);
-        using (Pen p = new Pen(Theme.EDGE)) e.Graphics.DrawRectangle(p, 0, 0, Width - 1, Height - 1);
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        using (GraphicsPath gp = Glass.Rounded(new Rectangle(0, 0, Width - 1, Height - 1), 12))
+        using (Pen p = new Pen(Color.FromArgb(60, 255, 255, 255))) e.Graphics.DrawPath(p, gp);
+        e.Graphics.SmoothingMode = SmoothingMode.None;
         Rectangle line = new Rectangle(20, 47, 340, 2);
         using (LinearGradientBrush gb = new LinearGradientBrush(line, Theme.ACCENT, Theme.BG, LinearGradientMode.Horizontal))
             e.Graphics.FillRectangle(gb, line);
