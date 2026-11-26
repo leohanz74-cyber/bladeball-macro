@@ -20,8 +20,8 @@ using System.Text;
 [assembly: AssemblyProduct("BladeBall Macro")]
 [assembly: AssemblyCompany("Leo")]
 [assembly: AssemblyCopyright("Leo 2026")]
-[assembly: AssemblyVersion("2.0.33.0")]
-[assembly: AssemblyFileVersion("2.0.33.0")]
+[assembly: AssemblyVersion("2.1.34.0")]
+[assembly: AssemblyFileVersion("2.1.34.0")]
 
 // ================= Design =================
 static class Theme
@@ -706,8 +706,8 @@ public class MacroForm : Form
     public const string ACCESS_KEY = "Hallo";
 
     // Versionsnummer: bei jedem neuen Update um 1 erhoehen
-    public const int BUILD = 33;              // intern fuer Updates, immer +1
-    public const string VERSION_NAME = "2.0"; // angezeigte Version
+    public const int BUILD = 34;              // intern fuer Updates, immer +1
+    public const string VERSION_NAME = "2.1"; // angezeigte Version
 
     // >>> Online-Updates fuer Freunde: hier den Raw-Link zu deiner BladeBallMacro.cs auf GitHub eintragen <<<
     // Beispiel: https://raw.githubusercontent.com/DEINNAME/bladeball-macro/main/BladeBallMacro.cs
@@ -856,6 +856,7 @@ public class MacroForm : Form
     volatile int gameState = 0;   // 0 unbekannt, 1 Blade Ball, 2 anderes Spiel / kein Spiel
     volatile bool bladeOnly = true;
     long bladeUniverse = 0;       // wird beim ersten Blade-Ball-Join gelernt (deckt Unter-Places ab)
+    const long BLADE_UNIVERSE = 4777817887L; // Blade Ball (aus dem echten Roblox-Log)
     long lastPlace = 0;
     string logPath = null;
     long logPos = 0;
@@ -942,6 +943,9 @@ public class MacroForm : Form
         lw.Priority = ThreadPriority.BelowNormal; // stoert nie
         lw.Start();
 
+        // Windows wartet bei jedem Tastendruck auf unseren Hook -> der muss sofort drankommen
+        try { using (Process me = Process.GetCurrentProcess()) me.PriorityClass = ProcessPriorityClass.AboveNormal; } catch { }
+
         Thread hk = new Thread(HookThread);
         hk.IsBackground = true;
         hk.Priority = ThreadPriority.Highest; // Hotkey reagiert sofort, auch wenn die UI gerade zeichnet
@@ -953,11 +957,41 @@ public class MacroForm : Form
 
         Thread worker = new Thread(Loop);
         worker.IsBackground = true;
-        worker.Priority = ThreadPriority.Normal; // konkurriert nicht mit Roblox um die CPU
+        worker.Priority = ThreadPriority.Highest; // schlaeft fast immer; wenn er dran ist, sofort
         worker.Start();
     }
 
     public static string SettingsPath() { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings.ini"); }
+
+    // Roblox' "Maximale Bildrate" aus den Einstellungen; unbekannt/unbegrenzt -> 240
+    static int RobloxFpsLimit()
+    {
+        try
+        {
+            string f = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Roblox\GlobalBasicSettings_13.xml");
+            if (File.Exists(f))
+            {
+                Match m = Regex.Match(File.ReadAllText(f), "<int name=\"FramerateCap\">(-?[0-9]+)</int>");
+                int cap;
+                if (m.Success && int.TryParse(m.Groups[1].Value, out cap) && cap > 0) return Math.Max(60, Math.Min(240, cap));
+            }
+        }
+        catch { }
+        return 240;
+    }
+
+    // Grenze neu setzen, wenn sich Roblox' FPS-Limit geaendert hat (z. B. nach den FPS-Flags)
+    void UpdateAutoMax()
+    {
+        int m = RobloxFpsLimit();
+        if (m == autoMax) return;
+        bool up = m > autoMax;
+        autoMax = m;
+        presetCps[0] = m;
+        if (autoCps > m) autoCps = m;
+        if (autoBest > m) autoBest = m;
+        if (up && !scanning) StartScan();
+    }
 
     void DetectRefreshRate()
     {
@@ -969,9 +1003,8 @@ public class MacroForm : Form
             if (hz > 1) refreshHz = hz;
         }
         catch { }
-        // AUTO: max. 120/s. Mehr bringt im Clash nichts und laesst schwache PCs laggen,
-        // weil Roblox oft weniger FPS schafft als der Monitor Hz hat.
-        autoMax = Math.Max(60, Math.Min(240, refreshHz)); // Roblox schafft max. 240 FPS
+        // AUTO: ein Druck pro Roblox-Bild. Grenze = Roblox' eigenes FPS-Limit (max. 240).
+        autoMax = RobloxFpsLimit();
         presetCps[0] = autoMax;
     }
 
@@ -1280,7 +1313,8 @@ public class MacroForm : Form
         bool front = RobloxForeground();
 
         // Chat-Schutz: Sicherheits-Timeout und zuruecksetzen, wenn Roblox nicht mehr vorne ist
-        if (chatOpen && (!front || clock.ElapsedTicks - Interlocked.Read(ref chatSince) > Stopwatch.Frequency * 30))
+        if (chatOpen && (!front || clock.ElapsedTicks - Interlocked.Read(ref chatSince) > Stopwatch.Frequency * 30
+            || (GetAsyncKeyState(0x01) & 0x8000) != 0)) // Linksklick ins Spiel beendet das Tippen
             chatOpen = false;
 
         if (!overlayOn || !front || !GameOk())
@@ -1321,7 +1355,13 @@ public class MacroForm : Form
     // Hintergrund-Aufgabe, die bei einem Fehler nur protokolliert statt abzustuerzen
     void Bg(ThreadStart a)
     {
-        ThreadPool.QueueUserWorkItem(delegate { try { a(); } catch (Exception ex) { LogError(ex); } });
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            Thread.CurrentThread.Priority = ThreadPriority.BelowNormal; // Aufraeum-Arbeit nie vor dem Spiel
+            try { a(); }
+            catch (Exception ex) { LogError(ex); }
+            finally { Thread.CurrentThread.Priority = ThreadPriority.Normal; }
+        });
     }
 
     // ---------- FPS MODE ----------
@@ -2050,8 +2090,8 @@ public class MacroForm : Form
                     respPending = true;
                     if (autoCps < autoBest) autoCps = autoBest; // volle Wucht: nicht mit gedrosselter Rate starten
                 }
-                if (!periodOn) { timeBeginPeriod(1); periodOn = true; }
-                go.Set();
+                go.Set(); // sofort wecken
+                if (!hiResTimer && !periodOn) { timeBeginPeriod(1); periodOn = true; }
             }
             else
             {
@@ -2090,6 +2130,7 @@ public class MacroForm : Form
         SetRunning(false);
         captureTarget = target;
         capturing = true;
+        RequestMouseHookUpdate();
         if (target == 1) spamChip.Text = "...";
         else if (target == 3) hot2Chip.Text = "...";
         else hotChip.Text = "...";
@@ -2112,6 +2153,7 @@ public class MacroForm : Form
         }
         captureTarget = 0;
         capturing = false;
+        RequestMouseHookUpdate();
         RefreshUi(true);
         SaveSettings();
     }
@@ -2139,24 +2181,51 @@ public class MacroForm : Form
         return false;
     }
 
+    [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] static extern bool PostThreadMessage(uint tid, uint msg, IntPtr w, IntPtr l);
+    volatile uint hookThreadId = 0;
+    const uint WM_UPDATE_MOUSEHOOK = 0x8001; // WM_APP + 1
+
+    static bool IsMouseKey(Keys k) { return k == Keys.XButton1 || k == Keys.XButton2 || k == Keys.MButton; }
+
+    bool MouseHookNeeded()
+    {
+        return IsMouseKey(hotKey) || IsMouseKey(hotKey2) || (capturing && (captureTarget == 2 || captureTarget == 3));
+    }
+
+    // laeuft auf dem Hook-Thread
+    void UpdateMouseHook(IntPtr mod)
+    {
+        bool need = MouseHookNeeded();
+        if (need && mhook == IntPtr.Zero) mhook = SetWindowsHookEx(14, mouseProc, mod, 0);
+        else if (!need && mhook != IntPtr.Zero) { UnhookWindowsHookEx(mhook); mhook = IntPtr.Zero; }
+    }
+
+    void RequestMouseHookUpdate()
+    {
+        if (hookThreadId != 0) PostThreadMessage(hookThreadId, WM_UPDATE_MOUSEHOOK, IntPtr.Zero, IntPtr.Zero);
+    }
+
     void HookThread()
     {
+        hookThreadId = GetCurrentThreadId();
         hookProc = delegate(int n, IntPtr w, IntPtr l) { try { return HookCb(n, w, l); } catch { return CallNextHookEx(hook, n, w, l); } };
         mouseProc = delegate(int n, IntPtr w, IntPtr l) { try { return MouseCb(n, w, l); } catch { return CallNextHookEx(mhook, n, w, l); } };
         IntPtr mod = GetModuleHandle(null);
         hook = SetWindowsHookEx(13, hookProc, mod, 0);
-        mhook = SetWindowsHookEx(14, mouseProc, mod, 0);
+        UpdateMouseHook(mod);
         // Windows entfernt Hooks stillschweigend, wenn der PC mal haengt -> jede Minute im Leerlauf neu setzen
         SetTimer(IntPtr.Zero, UIntPtr.Zero, 60000, IntPtr.Zero);
         MSG m;
         while (GetMessage(out m, IntPtr.Zero, 0, 0) > 0)
         {
+            if (m.message == WM_UPDATE_MOUSEHOOK) { UpdateMouseHook(mod); continue; }
             if (m.message == 0x0113 && !running && !hd1 && !hd2 && !capturing) // WM_TIMER
             {
                 if (hook != IntPtr.Zero) UnhookWindowsHookEx(hook);
-                if (mhook != IntPtr.Zero) UnhookWindowsHookEx(mhook);
+                if (mhook != IntPtr.Zero) { UnhookWindowsHookEx(mhook); mhook = IntPtr.Zero; }
                 hook = SetWindowsHookEx(13, hookProc, mod, 0);
-                mhook = SetWindowsHookEx(14, mouseProc, mod, 0);
+                UpdateMouseHook(mod);
             }
         }
     }
@@ -2251,7 +2320,6 @@ public class MacroForm : Form
         {
             int msg = w.ToInt32();
             int flags = Marshal.ReadInt32(l, 12);
-            if (msg == 0x0201 && chatOpen) chatOpen = false; // Klick ins Spiel beendet das Tippen
             if ((flags & 1) == 0) // eigene simulierte Klicks ignorieren
             {
                 Keys btn = Keys.None;
@@ -2276,7 +2344,7 @@ public class MacroForm : Form
                             if (captureTarget == 2) { if (btn != hotKey2) hotKey = btn; }
                             else if (btn != hotKey) hotKey2 = btn;
                             capturing = false;
-                            BeginInvoke((MethodInvoker)delegate { captureTarget = 0; RefreshUi(true); SaveSettings(); });
+                            BeginInvoke((MethodInvoker)delegate { captureTarget = 0; RequestMouseHookUpdate(); RefreshUi(true); SaveSettings(); });
                         }
                         return (IntPtr)1;
                     }
@@ -2325,19 +2393,20 @@ public class MacroForm : Form
     void WaitUntil(long target, bool abortOnStop)
     {
         long freq = Stopwatch.Frequency;
-        long spinZone = freq / 5000;             // letzte 0,2 ms
         long sleepThreshold = freq * 15 / 10000; // 1,5 ms (Fallback)
         IntPtr t = GetTimer();
+        long minWait = freq / 20000; // 50 µs: darunter lohnt kein Warten
         long rem;
-        while ((rem = target - clock.ElapsedTicks) > 0)
+        while ((rem = target - clock.ElapsedTicks) > minWait)
         {
             if (abortOnStop && !running) return;
-            if (t != IntPtr.Zero && rem > spinZone)
+            if (t != IntPtr.Zero)
             {
-                long due = -((rem - spinZone / 2) * 10000000L / freq); // relativ, 100-ns-Einheiten
+                long due = -(rem * 10000000L / freq); // relativ, 100-ns-Einheiten
                 if (due >= 0) due = -1;
                 if (SetWaitableTimer(t, ref due, 0, IntPtr.Zero, IntPtr.Zero, false)) { WaitForSingleObject(t, 50); continue; }
             }
+            // Fallback fuer altes Windows ohne Hochpraezisions-Timer
             if (rem > sleepThreshold) Thread.Sleep(1);
             else Thread.Yield();
         }
@@ -2363,6 +2432,7 @@ public class MacroForm : Form
     void LoopInner()
     {
         try { uint idx = 0; AvSetMmThreadCharacteristicsW("Games", ref idx); } catch { }
+        GetTimer(); // Timer vorab erzeugen -> erster Druck ohne Verzoegerung
         int size = Marshal.SizeOf(typeof(INPUT));
         long freq = Stopwatch.Frequency;
         long next = 0;
@@ -2416,8 +2486,8 @@ public class MacroForm : Form
                 {
                     double ratio = (double)winLate / (40.0 * interval);
                     bool warm = clock.ElapsedTicks - Interlocked.Read(ref runStart) > freq * 3 / 10;
-                    if (ratio > 0.30 && warm) autoCps = Math.Max(autoFloor, (int)(autoCps * 0.85));
-                    else if (ratio < 0.10) autoCps = Math.Min(autoMax, autoCps + 15);
+                    if (ratio > 0.45 && warm) autoCps = Math.Max(autoFloor, (int)(autoCps * 0.85));
+                    else if (ratio < 0.25) autoCps = Math.Min(autoMax, autoCps + 15);
                     winPresses = 0;
                     winLate = 0;
                 }
@@ -2476,7 +2546,7 @@ public class MacroForm : Form
                     if (t0 < now) { late += now - t0; t0 = now; }
                 }
                 double ratio = (double)late / (cycles * (double)interval);
-                if (ratio < 0.10) { best = rate; break; }
+                if (ratio < 0.25) { best = rate; break; }
             }
         }
         finally { timeEndPeriod(1); }
@@ -2506,8 +2576,10 @@ public class MacroForm : Form
     void PollLog()
     {
         pollCount++;
+        bool hadRoblox = robloxPids.Length > 0;
         // Prozessliste nur alle 3 s (solange Roblox laeuft), sonst jede Sekunde
         if (robloxPids.Length == 0 || pollCount % 3 == 0) RefreshRobloxPids();
+        if (!hadRoblox && robloxPids.Length > 0) UpdateAutoMax();
         if (robloxPids.Length == 0)
         {
             gameState = 0;
@@ -2556,7 +2628,7 @@ public class MacroForm : Form
         if (m.Success)
         {
             long.TryParse(m.Groups[1].Value, out lastPlace);
-            gameState = BladeBallPlaces.Contains(lastPlace) ? 1 : 2;
+            gameState = BladeBallPlaces.Contains(lastPlace) ? 1 : 0; // unbekannt: Universe-Zeile entscheidet
             return;
         }
         if (line.IndexOf("game_join_loadtime", StringComparison.Ordinal) >= 0)
@@ -2566,7 +2638,7 @@ public class MacroForm : Form
             if (u.Success && long.TryParse(u.Groups[1].Value, out uni))
             {
                 if (BladeBallPlaces.Contains(lastPlace)) bladeUniverse = uni;            // Universe merken
-                else if (bladeUniverse != 0 && uni == bladeUniverse) gameState = 1;     // Blade-Ball-Unterplace (Duels, Ranked ...)
+                else gameState = (uni == BLADE_UNIVERSE || (bladeUniverse != 0 && uni == bladeUniverse)) ? 1 : 2; // Unter-Places (Duels, Ranked ...)
             }
             return;
         }
