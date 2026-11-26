@@ -20,8 +20,8 @@ using System.Text;
 [assembly: AssemblyProduct("BladeBall Macro")]
 [assembly: AssemblyCompany("Leo")]
 [assembly: AssemblyCopyright("Leo 2026")]
-[assembly: AssemblyVersion("1.7.30.0")]
-[assembly: AssemblyFileVersion("1.7.30.0")]
+[assembly: AssemblyVersion("1.8.31.0")]
+[assembly: AssemblyFileVersion("1.8.31.0")]
 
 // ================= Design =================
 static class Theme
@@ -706,8 +706,8 @@ public class MacroForm : Form
     public const string ACCESS_KEY = "Hallo";
 
     // Versionsnummer: bei jedem neuen Update um 1 erhoehen
-    public const int BUILD = 30;              // intern fuer Updates, immer +1
-    public const string VERSION_NAME = "1.7"; // angezeigte Version
+    public const int BUILD = 31;              // intern fuer Updates, immer +1
+    public const string VERSION_NAME = "1.8"; // angezeigte Version
 
     // >>> Online-Updates fuer Freunde: hier den Raw-Link zu deiner BladeBallMacro.cs auf GitHub eintragen <<<
     // Beispiel: https://raw.githubusercontent.com/DEINNAME/bladeball-macro/main/BladeBallMacro.cs
@@ -741,6 +741,9 @@ public class MacroForm : Form
     [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
     [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
     [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
+    [DllImport("user32.dll")] static extern bool IsZoomed(IntPtr h);
+    [StructLayout(LayoutKind.Sequential)] struct RECT { public int Left, Top, Right, Bottom; }
+    [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
     [DllImport("user32.dll")] static extern short GetAsyncKeyState(int vk);
     [DllImport("kernel32.dll")] static extern bool K32EmptyWorkingSet(IntPtr h);
     [DllImport("user32.dll")] static extern UIntPtr SetTimer(IntPtr h, UIntPtr id, uint ms, IntPtr fn);
@@ -1584,6 +1587,7 @@ public class MacroForm : Form
         if (next == old) return;
         if (next == 0) RemoveFlags(); else ApplyFlags(next);
         resFailKey = null;
+        resUserOff = false;
         Bg(delegate { UpdateResolution(); });
         RefreshUi(true);
         SaveSettings();
@@ -1688,17 +1692,51 @@ public class MacroForm : Form
         catch { }
     }
 
+    volatile bool resUserOff = false; // F8 hat die Aufloesung zurueckgeholt -> bis zur naechsten Stufen-Wahl nicht wieder senken
+
+    // Roblox-Fenster wieder genau auf den Bildschirm setzen -> Avatar bleibt in der Mitte, nichts abgeschnitten
+    void FitRobloxWindow()
+    {
+        Thread.Sleep(400); // Windows braucht kurz nach dem Umschalten
+        foreach (int id in robloxPids)
+        {
+            try
+            {
+                IntPtr h;
+                using (Process p = Process.GetProcessById(id)) h = p.MainWindowHandle;
+                if (h == IntPtr.Zero || IsIconic(h)) continue;
+                Rectangle s = Screen.FromHandle(h).Bounds;
+                if (IsZoomed(h))
+                {
+                    ShowWindow(h, 9);  // wiederherstellen ...
+                    ShowWindow(h, 3);  // ... und neu maximieren -> passt sich der neuen Groesse an
+                }
+                else
+                {
+                    RECT r;
+                    GetWindowRect(h, out r);
+                    // Vollbild (F11) oder zu gross fuer den Bildschirm -> exakt auf den Bildschirm setzen
+                    if (r.Right - r.Left >= s.Width - 16 || r.Bottom - r.Top >= s.Height - 16 || r.Left < s.Left - 16 || r.Top < s.Top - 16
+                        || r.Right > s.Right + 16 || r.Bottom > s.Bottom + 16)
+                        SetWindowPos(h, IntPtr.Zero, s.X, s.Y, s.Width, s.Height, 0x0004 | 0x0010 | 0x0020); // NOZORDER | NOACTIVATE | FRAMECHANGED
+                }
+            }
+            catch (Exception ex) { LogError(ex); }
+        }
+    }
+
     // Laeuft jede Sekunde: Aufloesung passend zu Stufe + Spiel setzen
     void UpdateResolution()
     {
         // unbekannte Erkennung (0) zaehlt mit, damit es auch klappt, wenn die Log-Erkennung beim Freund nicht greift
         bool inGame = robloxPids.Length > 0 && gameState != 2;
-        if (flagsLevel >= 3 && inGame) LowerResolution();
+        if (robloxPids.Length == 0) resUserOff = false;
+        if (flagsLevel >= 3 && inGame && !resUserOff) LowerResolution();
         else
         {
             RestoreResolution();
             resFailKey = null;
-            resStatus = flagsLevel >= 3 ? (robloxPids.Length == 0 ? "waiting for Roblox" : "waiting for Blade Ball") : "";
+            resStatus = flagsLevel >= 3 ? (resUserOff ? "paused with F8" : (robloxPids.Length == 0 ? "waiting for Roblox" : "waiting for Blade Ball")) : "";
         }
     }
 
@@ -1768,7 +1806,8 @@ public class MacroForm : Form
                 if (r == 0)
                 {
                     resChanged = true; resLevel = lvl; resDevice = dev;
-                    resStatus = best.dmPelsWidth + "x" + best.dmPelsHeight + " active";
+                    resStatus = best.dmPelsWidth + "x" + best.dmPelsHeight + " active · F8 = undo";
+                    FitRobloxWindow();
                     LogInfo("Resolution " + cur.dmPelsWidth + "x" + cur.dmPelsHeight + " -> " + best.dmPelsWidth + "x" + best.dmPelsHeight + " @" + best.dmDisplayFrequency + "Hz on " + dev);
                 }
                 else
@@ -1790,6 +1829,7 @@ public class MacroForm : Form
             try { ChangeDisplaySettingsExReset(resDevice, IntPtr.Zero, IntPtr.Zero, 0, IntPtr.Zero); } catch { }
             resChanged = false;
             resDevice = null;
+            if (robloxPids.Length > 0) FitRobloxWindow();
         }
     }
 
@@ -2152,7 +2192,13 @@ public class MacroForm : Form
             if ((flags & 0x10) == 0 && kdown)
             {
                 // Panik-Taste F8: ganzes Macro an/aus
-                if (panicOn && vk == 0x77 && hotKey != Keys.F8 && spamKey != Keys.F8)
+                if (vk == 0x77 && resChanged && hotKey != Keys.F8 && spamKey != Keys.F8)
+                {
+                    // Notausgang: F8 holt sofort die normale Aufloesung zurueck
+                    resUserOff = true;
+                    Bg(delegate { RestoreResolution(); });
+                }
+                else if (panicOn && vk == 0x77 && hotKey != Keys.F8 && spamKey != Keys.F8)
                 {
                     try { BeginInvoke((MethodInvoker)delegate { SetArmed(!armed); }); } catch { }
                 }
