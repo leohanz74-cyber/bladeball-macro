@@ -20,8 +20,8 @@ using System.Text;
 [assembly: AssemblyProduct("BladeBall Macro")]
 [assembly: AssemblyCompany("Leo")]
 [assembly: AssemblyCopyright("Leo 2026")]
-[assembly: AssemblyVersion("1.0.23.0")]
-[assembly: AssemblyFileVersion("1.0.23.0")]
+[assembly: AssemblyVersion("1.1.24.0")]
+[assembly: AssemblyFileVersion("1.1.24.0")]
 
 // ================= Design =================
 static class Theme
@@ -677,8 +677,8 @@ public class MacroForm : Form
     public const string ACCESS_KEY = "Hallo";
 
     // Versionsnummer: bei jedem neuen Update um 1 erhoehen
-    public const int BUILD = 23;              // intern fuer Updates, immer +1
-    public const string VERSION_NAME = "1.0"; // angezeigte Version
+    public const int BUILD = 24;              // intern fuer Updates, immer +1
+    public const string VERSION_NAME = "1.1"; // angezeigte Version
 
     // >>> Online-Updates fuer Freunde: hier den Raw-Link zu deiner BladeBallMacro.cs auf GitHub eintragen <<<
     // Beispiel: https://raw.githubusercontent.com/DEINNAME/bladeball-macro/main/BladeBallMacro.cs
@@ -713,6 +713,7 @@ public class MacroForm : Form
     [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
     [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
     [DllImport("user32.dll")] static extern short GetAsyncKeyState(int vk);
+    [DllImport("kernel32.dll")] static extern bool K32EmptyWorkingSet(IntPtr h);
     [DllImport("kernel32.dll")] static extern IntPtr CreateWaitableTimerExW(IntPtr attr, IntPtr name, uint flags, uint access);
     [DllImport("kernel32.dll")] static extern bool SetWaitableTimer(IntPtr h, ref long due, int period, IntPtr cb, IntPtr arg, bool resume);
     [DllImport("kernel32.dll")] static extern uint WaitForSingleObject(IntPtr h, uint ms);
@@ -803,7 +804,21 @@ public class MacroForm : Form
     double bestClash = 0;
     long ovLastCount = 0, ovLastMs = 0;
     int ovRate = 0;
-    Button hot2Chip;
+    Button hot2Chip, bladeBtn;
+    Label bladeDesc;
+
+    // Blade-Ball-Erkennung: liest nur Roblox' eigene Logdatei (kein Zugriff aufs Spiel)
+    static readonly HashSet<long> BladeBallPlaces = new HashSet<long> { 13772394625L, 14798839770L, 15351762625L };
+    static readonly Regex JoinRx = new Regex(@"! Joining game '[0-9a-f\-]{36}' place ([0-9]+)", RegexOptions.Compiled);
+    static readonly Regex UniRx = new Regex(@"universeid:([0-9]+)", RegexOptions.Compiled);
+    volatile int gameState = 0;   // 0 unbekannt, 1 Blade Ball, 2 anderes Spiel / kein Spiel
+    volatile bool bladeOnly = true;
+    long bladeUniverse = 0;       // wird beim ersten Blade-Ball-Join gelernt (deckt Unter-Places ab)
+    long lastPlace = 0;
+    string logPath = null;
+    long logPos = 0;
+    long freedMb = 0;
+    bool selfTrimmed = false;
     string remoteSrc = null;
     bool fpsOn = false;
     int prevGameMode = -2, prevDvr = -2, prevCapture = -2; // -2 = noch nicht gesichert, -1 = war nicht gesetzt
@@ -878,6 +893,11 @@ public class MacroForm : Form
         ov.Start();
 
         KeyDown += OnKeyCapture;
+        Thread lw = new Thread(LogWatcher);
+        lw.IsBackground = true;
+        lw.Priority = ThreadPriority.BelowNormal; // stoert nie
+        lw.Start();
+
         Thread hk = new Thread(HookThread);
         hk.IsBackground = true;
         hk.Priority = ThreadPriority.Highest; // Hotkey reagiert sofort, auch wenn die UI gerade zeichnet
@@ -1007,7 +1027,7 @@ public class MacroForm : Form
         Label fpsTitle = new Label { Text = "FPS MODE", Font = new Font("Segoe UI Semibold", 15f, FontStyle.Regular), BackColor = Theme.CARD, AutoSize = true, Location = new Point(18, 12) };
         fpsModeInfo = new Label { ForeColor = Theme.MUTED, BackColor = Theme.CARD, Font = new Font("Segoe UI", 8.5f), AutoSize = false, Bounds = new Rectangle(19, 42, 220, 18) };
         fpsModeList = new Label { ForeColor = Theme.TEXT2, BackColor = Theme.CARD, Font = new Font("Segoe UI", 8.5f), AutoSize = false, Bounds = new Rectangle(19, 66, 310, 58),
-            Text = "Max power plan  ·  Windows Game Mode\nFast GPU for Roblox  ·  Background recording off\nCloses junk apps  ·  Slows down background apps" };
+            Text = "Max power plan  ·  Game Mode  ·  Fast GPU\nLow-latency DirectX  ·  Recording off\nCloses junk  ·  Slows & shrinks background apps" };
         fpsModeBtn = Theme.Btn("OFF", new Rectangle(248, 16, 78, 34), Theme.CHIP, 11f);
         ((RoundButton)fpsModeBtn).Radius = 17;
         fpsModeBtn.Click += delegate { SetFpsMode(!fpsMode); };
@@ -1039,6 +1059,8 @@ public class MacroForm : Form
         extrasPage.Controls.Add(ovRow);
         extrasPage.Controls.Add(Row(120, "Sound Feedback", "Beeps on toggle, chat and panic", out sndBtn, out d2));
         extrasPage.Controls.Add(Row(180, "Panic Key (F8)", "F8 turns the whole macro on/off", out panicBtn, out d2));
+        extrasPage.Controls.Add(Row(240, "Blade Ball Only", "", out bladeBtn, out bladeDesc));
+        bladeBtn.Click += delegate { bladeOnly = !bladeOnly; RefreshUi(true); SaveSettings(); };
 
         chatBtn.Click += delegate { chatProtect = !chatProtect; chatOpen = false; RefreshUi(true); SaveSettings(); };
         ovlBtn.Click += delegate { overlayOn = !overlayOn; RefreshUi(true); SaveSettings(); };
@@ -1058,6 +1080,15 @@ public class MacroForm : Form
         ((RoundButton)toggle).Radius = 16;
         p.Controls.AddRange(new Control[] { t, descLabel, toggle });
         return p;
+    }
+
+    void RefreshBladeRow()
+    {
+        string d;
+        if (gameState == 1) d = "In Blade Ball ✓";
+        else if (gameState == 2) d = bladeOnly ? "Other game – macro on standby" : "Other game (works anyway)";
+        else d = "Works only inside Blade Ball";
+        SetText(bladeDesc, d);
     }
 
     void ShowPage(int page)
@@ -1180,7 +1211,7 @@ public class MacroForm : Form
         if (chatOpen && (!front || clock.ElapsedTicks - Interlocked.Read(ref chatSince) > Stopwatch.Frequency * 30))
             chatOpen = false;
 
-        if (!overlayOn || !front)
+        if (!overlayOn || !front || !GameOk())
         {
             if (overlay.Visible) overlay.Hide();
             return;
@@ -1238,7 +1269,7 @@ public class MacroForm : Form
             EnableBoost();
             boostOn = boostActive;
             ApplyFps();
-            ThreadPool.QueueUserWorkItem(delegate { CloseJunk(); SlowBackground(); });
+            ThreadPool.QueueUserWorkItem(delegate { CloseJunk(); SlowBackground(); TrimBackground(); });
         }
         else
         {
@@ -1247,6 +1278,7 @@ public class MacroForm : Form
             RemoveFps();
             RestoreBackground();
             closedApps = 0;
+            freedMb = 0;
         }
         RefreshUi(true);
         SaveSettings();
@@ -1334,7 +1366,8 @@ public class MacroForm : Form
     const string RK_GCS = @"System\GameConfigStore";
     const string RK_DVR = @"Software\Microsoft\Windows\CurrentVersion\GameDVR";
     const string RK_GPU = @"Software\Microsoft\DirectX\UserGpuPreferences";
-    const string GPU_HIGH = "GpuPreference=2;";
+    const string GPU_HIGH = "GpuPreference=2;SwapEffectUpgradeEnable=1;";
+    const string GPU_HIGH_OLD = "GpuPreference=2;";
 
     static int GetDword(string key, string name)
     {
@@ -1424,7 +1457,10 @@ public class MacroForm : Form
             {
                 if (k != null)
                     foreach (string exe in RobloxExes())
-                        if ((k.GetValue(exe) as string) == GPU_HIGH) k.DeleteValue(exe, false);
+                    {
+                        string cur = k.GetValue(exe) as string;
+                        if (cur == GPU_HIGH || cur == GPU_HIGH_OLD) k.DeleteValue(exe, false);
+                    }
             }
         }
         catch { }
@@ -1446,8 +1482,10 @@ public class MacroForm : Form
         if (WindowState == FormWindowState.Minimized || !Visible)
         {
             if (backdrop.Visible) backdrop.Hide();
+            if (!selfTrimmed) { selfTrimmed = true; TrimSelf(); }
             return;
         }
+        selfTrimmed = false;
         if (!backdrop.Visible) backdrop.Show();
         SetWindowPos(backdrop.Handle, Handle, Left, Top, Width, Height, 0x0010); // SWP_NOACTIVATE, direkt hinter dem Macro
     }
@@ -1473,6 +1511,7 @@ public class MacroForm : Form
         Color sc;
         if (!armed) { SetText(statusText, "PAUSED"); sc = Theme.MUTED; }
         else if (chatOpen) { SetText(statusText, "CHAT"); sc = Theme.WARN; }
+        else if (!running && !GameOk()) { SetText(statusText, "STANDBY"); sc = Theme.MUTED; }
         else if (running) { SetText(statusText, "SPAMMING"); sc = Theme.OK; }
         else { SetText(statusText, "READY"); sc = Theme.ACCENT; }
         SetFore(statusText, sc);
@@ -1490,12 +1529,14 @@ public class MacroForm : Form
         fpsCard.AccentBar = Color.Empty;
         SetFore(fpsModeList, fpsMode ? Theme.TEXT2 : Theme.MUTED);
         SetText(fpsModeInfo, !fpsMode ? "One click for max FPS" :
-            ("Active · " + closedApps + " closed · " + slowedApps + " slowed" + (boostFailed ? " · no power plan" : "")));
+            (closedApps + " closed · " + slowedApps + " slowed · " + freedMb + " MB freed"));
         SetToggle(chatBtn, chatProtect);
         SetToggle(ovlBtn, overlayOn);
         SetText(ovlPosBtn, PosArrows[overlayPos]);
         SetToggle(sndBtn, soundOn);
         SetToggle(panicBtn, panicOn);
+        SetToggle(bladeBtn, bladeOnly);
+        RefreshBladeRow();
 
         string pv = presetCps[preset] + "/s · " + PresetHints[preset];
         if (preset == 0) pv = scanning ? "scanning..." : "AUTO " + autoCps + "/s · rescan";
@@ -1532,7 +1573,8 @@ public class MacroForm : Form
         if (preset == 0) SetText(perfValue, scanning ? "scanning..." : "AUTO " + autoCps + "/s · rescan");
 
         RefreshUpdateRow();
-        if (fpsMode) SetText(fpsModeInfo, "Active · " + closedApps + " closed · " + slowedApps + " slowed" + (boostFailed ? " · no power plan" : ""));
+        RefreshBladeRow();
+        if (fpsMode) SetText(fpsModeInfo, closedApps + " closed · " + slowedApps + " slowed · " + freedMb + " MB freed");
 
         if (running) dot.Glow = 50 + (int)(70 * Math.Abs(Math.Sin(clock.ElapsedMilliseconds / 160.0)));
         else dot.Glow = 60;
@@ -1692,7 +1734,7 @@ public class MacroForm : Form
             hotDown = true;
             Interlocked.Exchange(ref pressTick, clock.ElapsedTicks);
             if (chatOpen) return; // tippst gerade im Chat
-            if (armed && (!onlyRoblox || RobloxForeground()))
+            if (armed && (!onlyRoblox || RobloxForeground()) && GameOk())
             {
                 if (mode == 0) SetRunning(true);
                 else { SetRunning(!running); Play(running ? sndOn : sndOff); }
@@ -1985,6 +2027,127 @@ public class MacroForm : Form
         scanning = false;
     }
 
+    // ---------- Blade-Ball-Erkennung ----------
+    bool GameOk() { return !bladeOnly || gameState != 2; } // unbekannt = erlaubt, damit nie etwas kaputtgeht
+
+    void LogWatcher()
+    {
+        while (true)
+        {
+            try { PollLog(); } catch { }
+            Thread.Sleep(gameState == 1 ? 1500 : 1000);
+        }
+    }
+
+    void PollLog()
+    {
+        if (!RobloxRunning())
+        {
+            gameState = 0;
+            logPath = null;
+            return;
+        }
+        string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Roblox\logs");
+        if (!Directory.Exists(dir)) return;
+        FileInfo newest = null;
+        foreach (FileInfo f in new DirectoryInfo(dir).GetFiles("*.log"))
+            if (f.Name.IndexOf("Player", StringComparison.OrdinalIgnoreCase) >= 0 && (newest == null || f.LastWriteTimeUtc > newest.LastWriteTimeUtc))
+                newest = f;
+        if (newest == null) return;
+        if (newest.FullName != logPath) { logPath = newest.FullName; logPos = 0; lastPlace = 0; }
+
+        using (FileStream fs = new FileStream(logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+        {
+            long len = fs.Length;
+            if (len < logPos) logPos = 0;
+            if (len == logPos) return;
+            if (len - logPos > 8L * 1024 * 1024) logPos = len - 8L * 1024 * 1024; // riesige Logs: nur das Ende
+            fs.Seek(logPos, SeekOrigin.Begin);
+            byte[] buf = new byte[len - logPos];
+            int read = 0, r;
+            while (read < buf.Length && (r = fs.Read(buf, read, buf.Length - read)) > 0) read += r;
+            int end = Array.LastIndexOf(buf, (byte)10, read - 1);
+            if (end < 0) return; // noch keine ganze Zeile
+            string text = Encoding.UTF8.GetString(buf, 0, end + 1);
+            logPos += end + 1;
+            int before = gameState;
+            foreach (string line in text.Split('\n')) ParseLogLine(line);
+            if (before != 1 && gameState == 1) OnBladeBallJoined();
+        }
+    }
+
+    void ParseLogLine(string line)
+    {
+        if (line.Length < 20) return;
+        Match m = JoinRx.Match(line);
+        if (m.Success)
+        {
+            long.TryParse(m.Groups[1].Value, out lastPlace);
+            gameState = BladeBallPlaces.Contains(lastPlace) ? 1 : 2;
+            return;
+        }
+        if (line.IndexOf("game_join_loadtime", StringComparison.Ordinal) >= 0)
+        {
+            Match u = UniRx.Match(line);
+            long uni;
+            if (u.Success && long.TryParse(u.Groups[1].Value, out uni))
+            {
+                if (BladeBallPlaces.Contains(lastPlace)) bladeUniverse = uni;            // Universe merken
+                else if (bladeUniverse != 0 && uni == bladeUniverse) gameState = 1;     // Blade-Ball-Unterplace (Duels, Ranked ...)
+            }
+            return;
+        }
+        if (line.IndexOf("Time to disconnect replication data", StringComparison.Ordinal) >= 0) gameState = 2;
+    }
+
+    // Beim Betreten von Blade Ball: FPS MODE frisch anwenden (neu geoeffnete Apps mitnehmen)
+    void OnBladeBallJoined()
+    {
+        if (!fpsMode) return;
+        ThreadPool.QueueUserWorkItem(delegate { CloseJunk(); SlowBackground(); TrimBackground(); });
+    }
+
+    // Gibt Arbeitsspeicher von Hintergrund-Apps frei -> mehr RAM fuer Roblox (hilft vor allem bei 4-8 GB)
+    void TrimBackground()
+    {
+        int session;
+        using (Process me = Process.GetCurrentProcess()) session = me.SessionId;
+        long freed = 0;
+        foreach (Process p in Process.GetProcesses())
+        {
+            try
+            {
+                if (p.SessionId == session && SlowApps.Contains(p.ProcessName))
+                {
+                    long before = p.WorkingSet64;
+                    if (K32EmptyWorkingSet(p.Handle))
+                    {
+                        p.Refresh();
+                        freed += Math.Max(0, before - p.WorkingSet64);
+                    }
+                }
+            }
+            catch { }
+            finally { p.Dispose(); }
+        }
+        freedMb += freed / 1048576;
+    }
+
+    // Das Macro selbst schrumpft, wenn es minimiert ist (wenige MB statt ~40 MB)
+    void TrimSelf()
+    {
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            try
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                using (Process me = Process.GetCurrentProcess()) K32EmptyWorkingSet(me.Handle);
+            }
+            catch { }
+        });
+    }
+
     static bool RobloxRunning()
     {
         Process[] ps = Process.GetProcessesByName("RobloxPlayerBeta");
@@ -2003,6 +2166,7 @@ public class MacroForm : Form
             {
                 string[] kv = line.Split(new char[] { '=' }, 2);
                 if (kv.Length != 2) continue;
+                if (kv[0].Trim() == "buni") { long.TryParse(kv[1].Trim(), out bladeUniverse); continue; }
                 int v;
                 if (!int.TryParse(kv[1].Trim(), out v)) continue;
                 switch (kv[0].Trim())
@@ -2024,6 +2188,7 @@ public class MacroForm : Form
                     case "snd": soundOn = v == 1; break;
                     case "panic": panicOn = v == 1; break;
                     case "hot2": hotKey2 = (Keys)v; break;
+                    case "bonly": bladeOnly = v == 1; break;
                     case "wx": winX = v; break;
                     case "wy": winY = v; break;
 
@@ -2056,6 +2221,8 @@ public class MacroForm : Form
                 "snd=" + (soundOn ? 1 : 0),
                 "panic=" + (panicOn ? 1 : 0),
                 "hot2=" + (int)hotKey2,
+                "bonly=" + (bladeOnly ? 1 : 0),
+                "buni=" + bladeUniverse,
                 "wx=" + winX,
                 "wy=" + winY
             });
