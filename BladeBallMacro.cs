@@ -20,8 +20,8 @@ using System.Text;
 [assembly: AssemblyProduct("BladeBall Macro")]
 [assembly: AssemblyCompany("Leo")]
 [assembly: AssemblyCopyright("Leo 2026")]
-[assembly: AssemblyVersion("2.2.36.0")]
-[assembly: AssemblyFileVersion("2.2.36.0")]
+[assembly: AssemblyVersion("2.3.37.0")]
+[assembly: AssemblyFileVersion("2.3.37.0")]
 
 // ================= Design =================
 static class Theme
@@ -706,8 +706,8 @@ public class MacroForm : Form
     public const string ACCESS_KEY = "Hallo";
 
     // Versionsnummer: bei jedem neuen Update um 1 erhoehen
-    public const int BUILD = 36;              // intern fuer Updates, immer +1
-    public const string VERSION_NAME = "2.2.1"; // angezeigte Version
+    public const int BUILD = 37;              // intern fuer Updates, immer +1
+    public const string VERSION_NAME = "2.3"; // angezeigte Version
 
     // >>> Online-Updates fuer Freunde: hier den Raw-Link zu deiner BladeBallMacro.cs auf GitHub eintragen <<<
     // Beispiel: https://raw.githubusercontent.com/DEINNAME/bladeball-macro/main/BladeBallMacro.cs
@@ -802,7 +802,12 @@ public class MacroForm : Form
     int refreshHz = 60;
     volatile int autoCps = 120;   // Smart-AUTO: passt sich live an diesen PC an
     int autoMax = 120;
-    volatile bool scanning = false;
+    volatile bool scanning = false;   // = Feinabstimmung laeuft
+    Label tuneDetail;
+    volatile string tuneInfo = "";
+    long tuneDueMs = 0;                // naechste automatische Feinabstimmung im Spiel
+    int fpsEstMax = 0;                 // gemessene Roblox-FPS (gleitendes Maximum)
+    double lastLatP95 = -1, lastSendP95 = -1;
     volatile int autoFloor = 90;  // SMART geht nie tiefer als das
     string pcInfo = "";
 
@@ -1081,11 +1086,16 @@ public class MacroForm : Form
         for (int i = 0; i < 4; i++)
         {
             int idx = i;
-            presetBtns[i] = Theme.Btn(PresetNames[i], new Rectangle(10 + i * 80, 42, 76, 42), Theme.CHIP, 9.5f);
+            presetBtns[i] = Theme.Btn(PresetNames[i], new Rectangle(10 + i * 80, 36, 76, 34), Theme.CHIP, 9.5f);
             presetBtns[i].Click += delegate { preset = idx; RefreshUi(true); SaveSettings(); };
             ((RoundButton)presetBtns[i]).Outline = false;
             perf.Controls.Add(presetBtns[i]);
         }
+
+        tuneDetail = new Label { ForeColor = Theme.MUTED, BackColor = Theme.CARD, Font = new Font("Segoe UI", 8f), AutoSize = false, Bounds = new Rectangle(16, 74, 310, 16) };
+        perf.Controls.Add(tuneDetail);
+        perfValue.Cursor = Cursors.Hand;
+        perfValue.Click += delegate { StartTune(true); }; // Klick = jetzt neu abstimmen
 
         RoundPanel h2Card = new RoundPanel { Bounds = new Rectangle(0, 280, 340, 60) };
         h2Card.Controls.Add(Theme.Caption("2ND HOTKEY", 16, 12));
@@ -2000,8 +2010,9 @@ public class MacroForm : Form
         RefreshBladeRow();
 
         string pv = presetCps[preset] + "/s · " + PresetHints[preset];
-        if (preset == 0) pv = "AUTO " + autoCps + "/s · clash";
+        if (preset == 0) pv = scanning ? "tuning..." : "AUTO " + autoCps + "/s · re-tune";
         SetText(perfValue, pv);
+        SetText(tuneDetail, preset == 0 ? tuneInfo : "fixed rate · AUTO tunes itself to your PC");
         if (captureTarget != 2) SetText(hotChip, KeyName(hotKey));
         if (captureTarget != 3) SetText(hot2Chip, hotKey2 == Keys.None ? "NONE" : KeyName(hotKey2));
         if (captureTarget != 1) SetText(spamChip, KeyName(spamKey));
@@ -2031,7 +2042,7 @@ public class MacroForm : Form
         lastCount = c;
         cpsSmooth = cpsSmooth * 0.6 + cps * 0.4;
         if (cpsSmooth < 1) cpsSmooth = 0;
-        if (preset == 0) SetText(perfValue, "AUTO " + autoCps + "/s · clash");
+        if (preset == 0) { SetText(perfValue, scanning ? "tuning..." : "AUTO " + autoCps + "/s · re-tune"); SetText(tuneDetail, tuneInfo); }
 
         RefreshUpdateRow();
         RefreshBladeRow();
@@ -2615,13 +2626,164 @@ public class MacroForm : Form
         }
     }
 
-    // AUTO braucht keinen PC-Test mehr: volle Clash-Rate sofort
+    // ================= AUTO-Feinabstimmung auf diesen PC =================
+    // Misst, was die Clash-Rate wirklich begrenzt:
+    //   1) Roblox-FPS-Limit (Einstellungen)          -> mehr Druecke als Bilder bringen nichts
+    //   2) echte Roblox-FPS (gemessen, wenn moeglich) -> 1,3 Druecke pro echtem Bild
+    //   3) Timer-Genauigkeit dieses PCs (p95)        -> wie puenktlich Druecke rausgehen
+    //   4) Kosten eines Tastendrucks (p95)           -> was Windows + andere Programme pro Druck brauchen
+    // AUTO = das Kleinste davon -> so schnell wie moeglich, aber jedes Roblox-Bild bekommt einen Druck.
+
+    [DllImport("user32.dll")] static extern IntPtr SendMessageTimeout(IntPtr h, uint msg, IntPtr w, IntPtr l, uint flags, uint timeout, out IntPtr result);
+
+    // sofortige Grundeinstellung, dann Feinabstimmung im Hintergrund
     void StartScan()
     {
-        autoBest = autoMax;
-        autoCps = autoMax;
-        autoFloor = Math.Min(60, autoMax);
-        scanning = false;
+        int baseRate = AutoRate(RobloxFpsLimit());
+        autoMax = baseRate;
+        presetCps[0] = baseRate;
+        autoBest = baseRate;
+        if (!running) autoCps = baseRate;
+        autoFloor = Math.Min(60, baseRate);
+        StartTune(true);
+    }
+
+    void StartTune(bool measureInput)
+    {
+        if (scanning) return;
+        scanning = true;
+        Thread t = new Thread(delegate()
+        {
+            try { TuneInner(measureInput); }
+            catch (Exception ex) { LogError(ex); }
+            finally { scanning = false; }
+        });
+        t.IsBackground = true;
+        t.Priority = ThreadPriority.AboveNormal;
+        t.Start();
+    }
+
+    static double P95(List<double> v)
+    {
+        if (v.Count == 0) return 0;
+        v.Sort();
+        return v[Math.Min(v.Count - 1, (int)Math.Ceiling(v.Count * 0.95) - 1)];
+    }
+
+    IntPtr RobloxWindow()
+    {
+        foreach (int id in robloxPids)
+        {
+            try { using (Process p = Process.GetProcessById(id)) if (p.MainWindowHandle != IntPtr.Zero) return p.MainWindowHandle; }
+            catch { }
+        }
+        return IntPtr.Zero;
+    }
+
+    // Echte Roblox-FPS: Roblox beantwortet Fensternachrichten einmal pro Bild.
+    // Eine harmlose Leer-Nachricht (WM_NULL, die Windows selbst staendig schickt) pro Bild -> Antworten pro Sekunde = FPS.
+    int ProbeRobloxFps(int cap)
+    {
+        IntPtr hw = RobloxWindow();
+        if (hw == IntPtr.Zero || IsIconic(hw) || !RobloxForeground()) return 0;
+        long freq = Stopwatch.Frequency;
+        long start = clock.ElapsedTicks, end = start + freq * 3 / 4; // 0,75 s
+        int n = 0;
+        while (clock.ElapsedTicks < end)
+        {
+            if (running) return 0;
+            IntPtr r;
+            if (SendMessageTimeout(hw, 0x0000, IntPtr.Zero, IntPtr.Zero, 0x0002, 200, out r) == IntPtr.Zero) return 0; // SMTO_ABORTIFHUNG
+            n++;
+        }
+        double rate = n / ((clock.ElapsedTicks - start) / (double)freq);
+        // Plausibel nur, wenn es wie eine Bildrate aussieht (sonst beantwortet Roblox Nachrichten nicht bildweise)
+        if (rate < 15 || rate > cap * 1.15 + 5) return 0;
+        return (int)Math.Round(rate);
+    }
+
+    void TuneInner(bool measureInput)
+    {
+        try { uint idx = 0; AvSetMmThreadCharacteristicsW("Games", ref idx); } catch { } // gleiche Bedingungen wie der Spam-Thread
+        long freq = Stopwatch.Frequency;
+        Random rnd = new Random();
+
+        // 1) Timer-Genauigkeit: 150 Wartezeiten zwischen 1 und 3 ms
+        List<double> lat = new List<double>();
+        for (int i = 0; i < 150; i++)
+        {
+            if (running) return;
+            long target = clock.ElapsedTicks + freq * (1000 + rnd.Next(2000)) / 1000000;
+            WaitUntil(target, false);
+            lat.Add(Math.Max(0, clock.ElapsedTicks - target) * 1000.0 / freq);
+        }
+        double latP95 = P95(lat);
+
+        // 2) Kosten eines Tastendrucks (unsichtbare Taste F24; nur beim Start / auf Wunsch)
+        double sendP95 = lastSendP95;
+        if (measureInput || sendP95 < 0)
+        {
+            INPUT[] dn = new INPUT[1], up = new INPUT[1];
+            dn[0].type = 1; dn[0].U.ki.wVk = 0x87; dn[0].U.ki.dwExtraInfo = (IntPtr)INJECT_MAGIC;
+            up[0] = dn[0]; up[0].U.ki.dwFlags = KEYEVENTF_KEYUP;
+            int sz = Marshal.SizeOf(typeof(INPUT));
+            List<double> snd = new List<double>();
+            for (int i = 0; i < 30; i++)
+            {
+                if (running) return;
+                long a = clock.ElapsedTicks;
+                SendInput(1, dn, sz);
+                long b = clock.ElapsedTicks;
+                SendInput(1, up, sz);
+                long c = clock.ElapsedTicks;
+                snd.Add((b - a) * 1000.0 / freq);
+                snd.Add((c - b) * 1000.0 / freq);
+                WaitUntil(clock.ElapsedTicks + freq / 500, false);
+            }
+            sendP95 = P95(snd);
+        }
+
+        // 3) echte Roblox-FPS (nur wenn Roblox vorne ist)
+        int cap = RobloxFpsLimit();
+        int fps = ProbeRobloxFps(cap);
+        if (running) return;
+        if (fps > 0) fpsEstMax = Math.Max(fps, (int)(fpsEstMax * 0.85)); // gleitendes Maximum: FPS schwanken
+
+        // 4) Rate berechnen
+        double capRate = cap * 1.25;
+        double fpsRate = fpsEstMax > 0 ? fpsEstMax * 1.3 : capRate;
+        double perPressMs = 2 * latP95 + 2 * sendP95;                 // zwei Wartezeiten + zwei Tastenereignisse
+        double sustain = perPressMs > 0 ? 1000.0 / (perPressMs * 2.0) : 1000; // doppelte Reserve
+        double best = Math.Min(capRate, Math.Min(fpsRate, sustain));
+        int rate = (int)(Math.Round(Math.Max(60, Math.Min(300, best)) / 5.0) * 5);
+
+        lastLatP95 = latP95;
+        lastSendP95 = sendP95;
+        autoMax = rate;
+        presetCps[0] = rate;
+        autoBest = rate;
+        if (!running) autoCps = rate;
+        autoFloor = Math.Max(60, Math.Min(rate, fpsEstMax > 0 ? fpsEstMax : 60)); // nie unter 1 Druck pro Bild drosseln
+
+        string limit = rate >= (int)capRate - 2 ? "cap " + cap : (fpsEstMax > 0 && fpsRate <= sustain ? "FPS" : "PC");
+        tuneInfo = (fpsEstMax > 0 ? "FPS " + fpsEstMax : "FPS ?") + " · timer " + latP95.ToString("0.00") + "ms · input "
+            + sendP95.ToString("0.00") + "ms · limit " + limit;
+        LogInfo("AUTO tuned: " + rate + "/s (" + tuneInfo + ")");
+    }
+
+    // automatisch nachstimmen, solange du in Blade Ball bist (alle 60 s, nie waehrend eines Clashs)
+    void MaybeTune()
+    {
+        if (preset != 0 || scanning || running) return;
+        bool inGame = robloxPids.Length > 0 && gameState != 2 && RobloxForeground();
+        long now = clock.ElapsedMilliseconds;
+        if (!inGame) return;
+        if (tuneDueMs == 0) { tuneDueMs = now + 8000; return; } // Spiel erst fertig laden lassen
+        if (now >= tuneDueMs)
+        {
+            tuneDueMs = now + 60000;
+            StartTune(false);
+        }
     }
 
     // ---------- Blade-Ball-Erkennung ----------
@@ -2633,6 +2795,7 @@ public class MacroForm : Form
         {
             try { PollLog(); } catch { }
             try { UpdateResolution(); } catch { }
+            try { MaybeTune(); } catch { }
             Thread.Sleep(1000);
         }
     }
@@ -2645,7 +2808,7 @@ public class MacroForm : Form
         bool hadRoblox = robloxPids.Length > 0;
         // Prozessliste nur alle 3 s (solange Roblox laeuft), sonst jede Sekunde
         if (robloxPids.Length == 0 || pollCount % 3 == 0) RefreshRobloxPids();
-        if (!hadRoblox && robloxPids.Length > 0) UpdateAutoMax();
+        if (!hadRoblox && robloxPids.Length > 0) { UpdateAutoMax(); tuneDueMs = 0; fpsEstMax = 0; }
         if (robloxPids.Length == 0)
         {
             gameState = 0;
@@ -2714,6 +2877,7 @@ public class MacroForm : Form
     // Beim Betreten von Blade Ball: FPS MODE frisch anwenden (neu geoeffnete Apps mitnehmen)
     void OnBladeBallJoined()
     {
+        tuneDueMs = clock.ElapsedMilliseconds + 8000; // nach dem Laden auf die echten FPS abstimmen
         if (!fpsMode) return;
         Bg(delegate { CloseJunk(); SlowBackground(); TrimBackground(); });
     }
