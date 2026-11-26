@@ -20,8 +20,8 @@ using System.Text;
 [assembly: AssemblyProduct("BladeBall Macro")]
 [assembly: AssemblyCompany("Leo")]
 [assembly: AssemblyCopyright("Leo 2026")]
-[assembly: AssemblyVersion("1.6.29.0")]
-[assembly: AssemblyFileVersion("1.6.29.0")]
+[assembly: AssemblyVersion("1.7.30.0")]
+[assembly: AssemblyFileVersion("1.7.30.0")]
 
 // ================= Design =================
 static class Theme
@@ -706,8 +706,8 @@ public class MacroForm : Form
     public const string ACCESS_KEY = "Hallo";
 
     // Versionsnummer: bei jedem neuen Update um 1 erhoehen
-    public const int BUILD = 29;              // intern fuer Updates, immer +1
-    public const string VERSION_NAME = "1.6"; // angezeigte Version
+    public const int BUILD = 30;              // intern fuer Updates, immer +1
+    public const string VERSION_NAME = "1.7"; // angezeigte Version
 
     // >>> Online-Updates fuer Freunde: hier den Raw-Link zu deiner BladeBallMacro.cs auf GitHub eintragen <<<
     // Beispiel: https://raw.githubusercontent.com/DEINNAME/bladeball-macro/main/BladeBallMacro.cs
@@ -1583,8 +1583,8 @@ public class MacroForm : Form
         int old = flagsLevel;
         if (next == old) return;
         if (next == 0) RemoveFlags(); else ApplyFlags(next);
-        if (next < 3) RestoreResolution();
-        else if (gameState == 1) Bg(delegate { LowerResolution(); });
+        resFailKey = null;
+        Bg(delegate { UpdateResolution(); });
         RefreshUi(true);
         SaveSettings();
         // Flag-Set geaendert -> wirkt erst nach Roblox-Neustart (POTATO / + / ++ nutzen dasselbe Set)
@@ -1675,9 +1675,47 @@ public class MacroForm : Form
         public int dmICMMethod, dmICMIntent, dmMediaType, dmDitherType, dmReserved1, dmReserved2, dmPanningWidth, dmPanningHeight;
     }
     [DllImport("user32.dll", CharSet = CharSet.Ansi)] static extern bool EnumDisplaySettings(string dev, int mode, ref DEVMODE dm);
-    [DllImport("user32.dll", CharSet = CharSet.Ansi)] static extern int ChangeDisplaySettings(ref DEVMODE dm, int flags);
-    [DllImport("user32.dll", EntryPoint = "ChangeDisplaySettingsA")] static extern int ChangeDisplaySettingsReset(IntPtr dm, int flags);
+    [DllImport("user32.dll", CharSet = CharSet.Ansi)] static extern int ChangeDisplaySettingsEx(string dev, ref DEVMODE dm, IntPtr hwnd, int flags, IntPtr lParam);
+    [DllImport("user32.dll", CharSet = CharSet.Ansi, EntryPoint = "ChangeDisplaySettingsExA")] static extern int ChangeDisplaySettingsExReset(string dev, IntPtr dm, IntPtr hwnd, int flags, IntPtr lParam);
     readonly object resLock = new object();
+    string resDevice = null;      // Bildschirm, dessen Aufloesung gesenkt wurde
+    string resFailKey = null;     // gescheiterter Versuch -> nicht jede Sekunde neu probieren
+    volatile string resStatus = "";
+
+    public static void LogInfo(string msg)
+    {
+        try { File.AppendAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "error.log"), DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "  v" + VERSION_NAME + "  INFO " + msg + Environment.NewLine); }
+        catch { }
+    }
+
+    // Laeuft jede Sekunde: Aufloesung passend zu Stufe + Spiel setzen
+    void UpdateResolution()
+    {
+        // unbekannte Erkennung (0) zaehlt mit, damit es auch klappt, wenn die Log-Erkennung beim Freund nicht greift
+        bool inGame = robloxPids.Length > 0 && gameState != 2;
+        if (flagsLevel >= 3 && inGame) LowerResolution();
+        else
+        {
+            RestoreResolution();
+            resFailKey = null;
+            resStatus = flagsLevel >= 3 ? (robloxPids.Length == 0 ? "waiting for Roblox" : "waiting for Blade Ball") : "";
+        }
+    }
+
+    // Der Bildschirm, auf dem Roblox gerade ist (wichtig bei 2 Monitoren)
+    string RobloxScreen()
+    {
+        foreach (int id in robloxPids)
+        {
+            try
+            {
+                using (Process p = Process.GetProcessById(id))
+                    if (p.MainWindowHandle != IntPtr.Zero) return Screen.FromHandle(p.MainWindowHandle).DeviceName;
+            }
+            catch { }
+        }
+        return Screen.PrimaryScreen.DeviceName;
+    }
 
     void LowerResolution()
     {
@@ -1685,42 +1723,62 @@ public class MacroForm : Form
         {
             int lvl = flagsLevel;
             if (lvl < 3) return;
-            if (resChanged && resLevel == lvl) return;
-            if (resChanged) { try { ChangeDisplaySettingsReset(IntPtr.Zero, 0); } catch { } resChanged = false; }
+            string dev = RobloxScreen();
+            string key = lvl + "|" + dev;
+            if (resChanged && resLevel == lvl && resDevice == dev) return;
+            if (resFailKey == key) return;
+            if (resChanged) { try { ChangeDisplaySettingsExReset(resDevice, IntPtr.Zero, IntPtr.Zero, 0, IntPtr.Zero); } catch { } resChanged = false; }
             try
             {
                 DEVMODE cur = new DEVMODE();
                 cur.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE));
-                if (!EnumDisplaySettings(null, -1, ref cur)) return; // aktueller Modus
+                if (!EnumDisplaySettings(dev, -1, ref cur)) { resFailKey = key; resStatus = "can't read screen"; LogInfo("EnumDisplaySettings failed for " + dev); return; }
+                double aspect = (double)cur.dmPelsWidth / cur.dmPelsHeight;
+
                 DEVMODE best = new DEVMODE();
+                double bestScore = double.MaxValue;
                 bool found = false;
                 DEVMODE dm = new DEVMODE();
                 dm.dmSize = cur.dmSize;
-                for (int i = 0; EnumDisplaySettings(null, i, ref dm); i++)
+                for (int i = 0; EnumDisplaySettings(dev, i, ref dm); i++)
                 {
-                    if (dm.dmBitsPerPel != cur.dmBitsPerPel) continue;
+                    if (dm.dmBitsPerPel < 16) continue;
+                    if (dm.dmPelsWidth < 640 || dm.dmPelsHeight < 480) continue;
+                    if (dm.dmPelsWidth >= cur.dmPelsWidth && dm.dmPelsHeight >= cur.dmPelsHeight) continue; // muss kleiner sein
+                    double a = (double)dm.dmPelsWidth / dm.dmPelsHeight;
+                    double aspectPenalty = Math.Abs(a - aspect) * 4000;  // gleiches Format bevorzugt, aber nicht Pflicht
+                    double freqPenalty = Math.Abs(dm.dmDisplayFrequency - cur.dmDisplayFrequency) * 5; // Hz moeglichst behalten (240 Hz bleibt 240 Hz)
+                    if (dm.dmBitsPerPel != cur.dmBitsPerPel) freqPenalty += 500;
+                    double score;
                     if (lvl >= 4)
-                    {
-                        // POTATO++: kleinste Aufloesung, die der Bildschirm kann (meist 640x480 oder 800x600)
-                        if (dm.dmPelsWidth < 640 || dm.dmPelsHeight < 480) continue;
-                        long px = (long)dm.dmPelsWidth * dm.dmPelsHeight, bpx = (long)best.dmPelsWidth * best.dmPelsHeight;
-                        bool smaller = !found || px < bpx ||
-                            (px == bpx && Math.Abs(dm.dmDisplayFrequency - cur.dmDisplayFrequency) < Math.Abs(best.dmDisplayFrequency - cur.dmDisplayFrequency));
-                        if (smaller) { best = dm; found = true; }
-                        continue;
-                    }
-                    // POTATO+: gleiches Seitenverhaeltnis, ca. 2/3 der Breite (1920x1080 -> 1280x720), nicht kleiner als 960
-                    if ((long)dm.dmPelsWidth * cur.dmPelsHeight != (long)dm.dmPelsHeight * cur.dmPelsWidth) continue;
-                    if (dm.dmPelsWidth > cur.dmPelsWidth * 7 / 10 || dm.dmPelsWidth < 960) continue;
-                    bool better = !found || dm.dmPelsWidth > best.dmPelsWidth ||
-                        (dm.dmPelsWidth == best.dmPelsWidth && Math.Abs(dm.dmDisplayFrequency - cur.dmDisplayFrequency) < Math.Abs(best.dmDisplayFrequency - cur.dmDisplayFrequency));
-                    if (better) { best = dm; found = true; }
+                        score = (double)dm.dmPelsWidth * dm.dmPelsHeight / 1000.0 + freqPenalty; // POTATO++: so klein wie moeglich
+                    else
+                        score = Math.Abs(dm.dmPelsWidth - cur.dmPelsWidth * 2.0 / 3.0) + aspectPenalty + freqPenalty; // POTATO+: ca. 2/3
+                    if (score < bestScore) { bestScore = score; best = dm; found = true; }
                 }
-                if (!found) return;
-                best.dmFields = 0x80000 | 0x100000 | 0x400000; // Breite | Hoehe | Frequenz
-                if (ChangeDisplaySettings(ref best, 0x4) == 0) { resChanged = true; resLevel = lvl; } // 0x4 = nur voruebergehend
+                if (!found)
+                {
+                    resFailKey = key;
+                    resStatus = "screen has no lower resolution";
+                    LogInfo("No lower display mode on " + dev + " (current " + cur.dmPelsWidth + "x" + cur.dmPelsHeight + ")");
+                    return;
+                }
+                best.dmFields = 0x40000 | 0x80000 | 0x100000 | 0x400000; // Farbtiefe | Breite | Hoehe | Frequenz
+                int r = ChangeDisplaySettingsEx(dev, ref best, IntPtr.Zero, 0x4, IntPtr.Zero); // 0x4 = nur voruebergehend
+                if (r == 0)
+                {
+                    resChanged = true; resLevel = lvl; resDevice = dev;
+                    resStatus = best.dmPelsWidth + "x" + best.dmPelsHeight + " active";
+                    LogInfo("Resolution " + cur.dmPelsWidth + "x" + cur.dmPelsHeight + " -> " + best.dmPelsWidth + "x" + best.dmPelsHeight + " @" + best.dmDisplayFrequency + "Hz on " + dev);
+                }
+                else
+                {
+                    resFailKey = key;
+                    resStatus = "resolution change blocked (" + r + ")";
+                    LogInfo("ChangeDisplaySettingsEx failed with " + r + " for " + best.dmPelsWidth + "x" + best.dmPelsHeight + " on " + dev);
+                }
             }
-            catch (Exception ex) { LogError(ex); }
+            catch (Exception ex) { resFailKey = key; LogError(ex); }
         }
     }
 
@@ -1729,8 +1787,9 @@ public class MacroForm : Form
         lock (resLock)
         {
             if (!resChanged) return;
-            try { ChangeDisplaySettingsReset(IntPtr.Zero, 0); } catch { }
+            try { ChangeDisplaySettingsExReset(resDevice, IntPtr.Zero, IntPtr.Zero, 0, IntPtr.Zero); } catch { }
             resChanged = false;
+            resDevice = null;
         }
     }
 
@@ -1843,7 +1902,7 @@ public class MacroForm : Form
         SetToggle(minBtn, autoMin);
         SetText(flagsBtn, FlagLevelNames[flagsLevel] + "  ▾");
         SetBack(flagsBtn, flagsLevel > 0 ? Theme.ACCENT : Theme.CHIP);
-        SetText(flagsDesc, flagsLevel == 0 ? "Pick a graphics level" : FlagLevelInfo[flagsLevel]);
+        SetText(flagsDesc, flagsLevel == 0 ? "Pick a graphics level" : (flagsLevel >= 3 && resStatus.Length > 0 ? resStatus : FlagLevelInfo[flagsLevel]));
         SetText(fpsModeBtn, fpsMode ? "ON" : "OFF");
         SetBack(fpsModeBtn, fpsMode ? Theme.ACCENT : Theme.CHIP);
         fpsCard.AccentBar = Color.Empty;
@@ -1894,6 +1953,7 @@ public class MacroForm : Form
 
         RefreshUpdateRow();
         RefreshBladeRow();
+        if (flagsLevel >= 3) SetText(flagsDesc, resStatus.Length > 0 ? resStatus : FlagLevelInfo[flagsLevel]);
         if (fpsMode) SetText(fpsModeInfo, closedApps + " closed · " + slowedApps + " slowed · " + freedMb + " MB freed");
 
         if (running) dot.Glow = 50 + (int)(70 * Math.Abs(Math.Sin(clock.ElapsedMilliseconds / 160.0)));
@@ -2384,6 +2444,7 @@ public class MacroForm : Form
         while (true)
         {
             try { PollLog(); } catch { }
+            try { UpdateResolution(); } catch { }
             Thread.Sleep(1000);
         }
     }
@@ -2395,14 +2456,13 @@ public class MacroForm : Form
         {
             gameState = 0;
             logPath = null;
-            RestoreResolution();
             return;
         }
         string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Roblox\logs");
         if (!Directory.Exists(dir)) return;
         FileInfo newest = null;
         foreach (FileInfo f in new DirectoryInfo(dir).GetFiles("*.log"))
-            if (f.Name.IndexOf("Player", StringComparison.OrdinalIgnoreCase) >= 0 && (newest == null || f.LastWriteTimeUtc > newest.LastWriteTimeUtc))
+            if (f.Name.IndexOf("Player", StringComparison.OrdinalIgnoreCase) >= 0 && f.Name.IndexOf("CrashHandler", StringComparison.OrdinalIgnoreCase) < 0 && (newest == null || f.LastWriteTimeUtc > newest.LastWriteTimeUtc))
                 newest = f;
         if (newest == null) return;
         if (newest.FullName != logPath) { logPath = newest.FullName; logPos = 0; lastPlace = 0; }
@@ -2424,8 +2484,6 @@ public class MacroForm : Form
             int before = gameState;
             foreach (string line in text.Split('\n')) ParseLogLine(line);
             if (before != 1 && gameState == 1) OnBladeBallJoined();
-            if (gameState == 1 && flagsLevel >= 3) LowerResolution();
-            else if (gameState != 1) RestoreResolution();
         }
     }
 
