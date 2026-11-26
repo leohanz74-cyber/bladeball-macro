@@ -20,8 +20,8 @@ using System.Text;
 [assembly: AssemblyProduct("BladeBall Macro")]
 [assembly: AssemblyCompany("Leo")]
 [assembly: AssemblyCopyright("Leo 2026")]
-[assembly: AssemblyVersion("1.2.25.0")]
-[assembly: AssemblyFileVersion("1.2.25.0")]
+[assembly: AssemblyVersion("1.3.26.0")]
+[assembly: AssemblyFileVersion("1.3.26.0")]
 
 // ================= Design =================
 static class Theme
@@ -677,8 +677,8 @@ public class MacroForm : Form
     public const string ACCESS_KEY = "Hallo";
 
     // Versionsnummer: bei jedem neuen Update um 1 erhoehen
-    public const int BUILD = 25;              // intern fuer Updates, immer +1
-    public const string VERSION_NAME = "1.2"; // angezeigte Version
+    public const int BUILD = 26;              // intern fuer Updates, immer +1
+    public const string VERSION_NAME = "1.3"; // angezeigte Version
 
     // >>> Online-Updates fuer Freunde: hier den Raw-Link zu deiner BladeBallMacro.cs auf GitHub eintragen <<<
     // Beispiel: https://raw.githubusercontent.com/DEINNAME/bladeball-macro/main/BladeBallMacro.cs
@@ -804,7 +804,10 @@ public class MacroForm : Form
     double bestClash = 0;
     long ovLastCount = 0, ovLastMs = 0;
     int ovRate = 0;
-    Button hot2Chip, bladeBtn;
+    Button hot2Chip, bladeBtn, flagsBtn;
+    Label flagsDesc;
+    bool flagsOn = false;
+    int flagsCount = 0;
     Label bladeDesc;
 
     // Blade-Ball-Erkennung: liest nur Roblox' eigene Logdatei (kein Zugriff aufs Spiel)
@@ -880,6 +883,7 @@ public class MacroForm : Form
         bool startFps = fpsModeKnown ? fpsModeSaved : (boostOn || fpsOn);
         if (fpsOn && !startFps) RemoveFps();
         if (startFps) SetFpsMode(true);
+        if (flagsOn) ApplyFlags();
         RefreshUi(true);
 
         System.Windows.Forms.Timer ui = new System.Windows.Forms.Timer();
@@ -1036,17 +1040,21 @@ public class MacroForm : Form
         boostPage.Controls.Add(fpsCard);
 
         Label dummy;
-        boostPage.Controls.Add(Row(144, "Auto-Minimize", "Hides when Roblox is focused", out minBtn, out dummy));
-        boostPage.Controls.Add(Row(204, "Online Update", "", out updBtn, out updDesc));
+        boostPage.Controls.Add(Row(142, "Roblox FPS Flags", "", out flagsBtn, out flagsDesc));
+        boostPage.Controls.Add(Row(202, "Auto-Minimize", "Hides when Roblox is focused", out minBtn, out dummy));
+        boostPage.Controls.Add(Row(262, "Online Update", "", out updBtn, out updDesc));
+        flagsBtn.Click += delegate { if (flagsOn) RemoveFlags(); else ApplyFlags(); RefreshUi(true); SaveSettings(); };
         updBtn.Text = "CHECK";
         updBtn.BackColor = Theme.ACCENT;
         minBtn.Click += delegate { autoMin = !autoMin; RefreshUi(true); SaveSettings(); };
         updBtn.Click += delegate { if (updState == 3) InstallOnline(); else CheckOnline(); };
 
-        updateBtn = Theme.Btn("Rebuild from local .cs", new Rectangle(0, 272, 340, 32), Theme.CHIP, 9f);
-        updateBtn.ForeColor = Theme.MUTED;
-        updateBtn.Click += delegate { DoUpdate(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "BladeBallMacro.cs")); };
-        boostPage.Controls.Add(updateBtn);
+        // Notfall: Rechtsklick auf CHECK baut die EXE aus der lokalen .cs neu
+        updateBtn = updBtn;
+        updBtn.MouseUp += delegate(object s, MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Right) DoUpdate(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "BladeBallMacro.cs"));
+        };
 
         // ---------- Seite EXTRAS ----------
         extrasPage = new Panel { Bounds = new Rectangle(20, 222, 340, 340), BackColor = Theme.BG, Visible = false };
@@ -1428,6 +1436,72 @@ public class MacroForm : Form
         return list;
     }
 
+    // Nur Flags von Roblox' offizieller Allowlist (seit 09/2025). Nicht erlaubte Flags ignoriert Roblox einfach.
+    static readonly string[][] FpsFlags = {
+        new string[] { "DFFlagTextureQualityOverrideEnabled", "True" },  // Textur-Qualitaet festlegen ...
+        new string[] { "DFIntTextureQualityOverride", "0" },              // ... auf die niedrigste (weniger VRAM, mehr FPS)
+        new string[] { "FIntFRMMinGrassDistance", "0" },                  // kein Gras
+        new string[] { "FIntFRMMaxGrassDistance", "0" },
+        new string[] { "DFIntCSGLevelOfDetailSwitchingDistance", "0" },   // weniger Detail bei Union-Bauteilen
+        new string[] { "DFIntCSGLevelOfDetailSwitchingDistanceL12", "0" },
+        new string[] { "DFIntCSGLevelOfDetailSwitchingDistanceL23", "0" },
+        new string[] { "DFIntCSGLevelOfDetailSwitchingDistanceL34", "0" }
+    };
+
+    void ApplyFlags()
+    {
+        int n = 0;
+        foreach (string exe in RobloxExes())
+        {
+            try
+            {
+                string dir = Path.Combine(Path.GetDirectoryName(exe), "ClientSettings");
+                string f = Path.Combine(dir, "ClientAppSettings.json");
+                string bak = f + ".bbm.bak", mark = f + ".bbm";
+                Directory.CreateDirectory(dir);
+
+                // Original (eigene Flags des Nutzers) einmal sichern und beibehalten
+                string orig = "";
+                if (File.Exists(bak)) orig = File.ReadAllText(bak);
+                else if (File.Exists(mark)) orig = "";
+                else if (File.Exists(f)) { orig = File.ReadAllText(f); File.Copy(f, bak, true); }
+                else File.WriteAllText(mark, "");
+
+                string inner = orig.Trim();
+                if (inner.StartsWith("{") && inner.EndsWith("}")) inner = inner.Substring(1, inner.Length - 2).Trim();
+                else inner = "";
+                List<string> add = new List<string>();
+                foreach (string[] kv in FpsFlags)
+                    if (inner.IndexOf("\"" + kv[0] + "\"", StringComparison.Ordinal) < 0) // eigene Werte des Nutzers haben Vorrang
+                        add.Add("  \"" + kv[0] + "\": \"" + kv[1] + "\"");
+                string body = (inner.Length > 0 ? "  " + inner : "");
+                if (add.Count > 0) body += (body.Length > 0 ? ",\n" : "") + string.Join(",\n", add.ToArray());
+                File.WriteAllText(f, "{\n" + body + "\n}\n", new UTF8Encoding(false));
+                n++;
+            }
+            catch (Exception ex) { LogError(ex); }
+        }
+        flagsCount = n;
+        flagsOn = true;
+    }
+
+    void RemoveFlags()
+    {
+        foreach (string exe in RobloxExes())
+        {
+            try
+            {
+                string f = Path.Combine(Path.GetDirectoryName(exe), @"ClientSettings\ClientAppSettings.json");
+                string bak = f + ".bbm.bak", mark = f + ".bbm";
+                if (File.Exists(bak)) { File.Copy(bak, f, true); File.Delete(bak); }
+                else if (File.Exists(mark)) { if (File.Exists(f)) File.Delete(f); File.Delete(mark); }
+            }
+            catch (Exception ex) { LogError(ex); }
+        }
+        flagsOn = false;
+        flagsCount = 0;
+    }
+
     void ApplyFps()
     {
         try
@@ -1535,6 +1609,8 @@ public class MacroForm : Form
         for (int i = 0; i < 4; i++) SetBack(presetBtns[i], i == preset ? Theme.ACCENT : Theme.CHIP);
 
         SetToggle(minBtn, autoMin);
+        SetToggle(flagsBtn, flagsOn);
+        SetText(flagsDesc, flagsOn ? "Active in " + flagsCount + " Roblox · restart Roblox" : "Low textures, no grass, less detail");
         SetText(fpsModeBtn, fpsMode ? "ON" : "OFF");
         SetBack(fpsModeBtn, fpsMode ? Theme.ACCENT : Theme.CHIP);
         fpsCard.AccentBar = Color.Empty;
@@ -2220,6 +2296,7 @@ public class MacroForm : Form
                     case "automin": autoMin = v == 1; break;
                     case "fps": fpsOn = v == 1; break;
                     case "fpsmode": fpsModeSaved = v == 1; fpsModeKnown = true; break;
+                    case "flags": flagsOn = v == 1; break;
                     case "pgm": prevGameMode = v; break;
                     case "pdvr": prevDvr = v; break;
                     case "pcap": prevCapture = v; break;
@@ -2253,6 +2330,7 @@ public class MacroForm : Form
                 "automin=" + (autoMin ? 1 : 0),
                 "fps=" + (fpsOn ? 1 : 0),
                 "fpsmode=" + (fpsMode ? 1 : 0),
+                "flags=" + (flagsOn ? 1 : 0),
                 "pgm=" + prevGameMode,
                 "pdvr=" + prevDvr,
                 "pcap=" + prevCapture,
