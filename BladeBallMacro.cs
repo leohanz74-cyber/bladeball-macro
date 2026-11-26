@@ -20,8 +20,8 @@ using System.Text;
 [assembly: AssemblyProduct("BladeBall Macro")]
 [assembly: AssemblyCompany("Leo")]
 [assembly: AssemblyCopyright("Leo 2026")]
-[assembly: AssemblyVersion("1.3.26.0")]
-[assembly: AssemblyFileVersion("1.3.26.0")]
+[assembly: AssemblyVersion("1.4.27.0")]
+[assembly: AssemblyFileVersion("1.4.27.0")]
 
 // ================= Design =================
 static class Theme
@@ -677,8 +677,8 @@ public class MacroForm : Form
     public const string ACCESS_KEY = "Hallo";
 
     // Versionsnummer: bei jedem neuen Update um 1 erhoehen
-    public const int BUILD = 26;              // intern fuer Updates, immer +1
-    public const string VERSION_NAME = "1.3"; // angezeigte Version
+    public const int BUILD = 27;              // intern fuer Updates, immer +1
+    public const string VERSION_NAME = "1.4"; // angezeigte Version
 
     // >>> Online-Updates fuer Freunde: hier den Raw-Link zu deiner BladeBallMacro.cs auf GitHub eintragen <<<
     // Beispiel: https://raw.githubusercontent.com/DEINNAME/bladeball-macro/main/BladeBallMacro.cs
@@ -807,6 +807,8 @@ public class MacroForm : Form
     Button hot2Chip, bladeBtn, flagsBtn;
     Label flagsDesc;
     bool flagsOn = false;
+    int flagsLevel = 0; // 0 aus, 1 LOW, 2 POTATO
+    static readonly string[] FlagLevelNames = { "OFF", "LOW", "POTATO" };
     int flagsCount = 0;
     Label bladeDesc;
 
@@ -1043,7 +1045,13 @@ public class MacroForm : Form
         boostPage.Controls.Add(Row(142, "Roblox FPS Flags", "", out flagsBtn, out flagsDesc));
         boostPage.Controls.Add(Row(202, "Auto-Minimize", "Hides when Roblox is focused", out minBtn, out dummy));
         boostPage.Controls.Add(Row(262, "Online Update", "", out updBtn, out updDesc));
-        flagsBtn.Click += delegate { if (flagsOn) RemoveFlags(); else ApplyFlags(); RefreshUi(true); SaveSettings(); };
+        flagsBtn.Click += delegate
+        {
+            int next = (flagsLevel + 1) % 3;
+            if (next == 0) RemoveFlags(); else ApplyFlags(next);
+            RefreshUi(true);
+            SaveSettings();
+        };
         updBtn.Text = "CHECK";
         updBtn.BackColor = Theme.ACCENT;
         minBtn.Click += delegate { autoMin = !autoMin; RefreshUi(true); SaveSettings(); };
@@ -1061,8 +1069,8 @@ public class MacroForm : Form
         Label d2;
         extrasPage.Controls.Add(Row(0, "Chat Protection", "Pauses while you type (/ or -)", out chatBtn, out d2));
         RoundPanel ovRow = Row(60, "In-Game Overlay", "Status pill in the top bar", out ovlBtn, out d2);
-        d2.Width = 170;
-        ovlPosBtn = Theme.Btn(PosArrows[0], new Rectangle(196, 12, 58, 32), Theme.CHIP, 12f);
+        d2.Width = 165;
+        ovlPosBtn = Theme.Btn(PosArrows[0], new Rectangle(188, 12, 58, 32), Theme.CHIP, 12f);
         ((RoundButton)ovlPosBtn).Radius = 16;
         ovRow.Controls.Add(ovlPosBtn);
         extrasPage.Controls.Add(ovRow);
@@ -1085,7 +1093,7 @@ public class MacroForm : Form
         RoundPanel p = new RoundPanel { Bounds = new Rectangle(0, y, 340, 56) };
         Label t = new Label { Text = title, Font = new Font("Segoe UI Semibold", 10f, FontStyle.Regular), BackColor = Theme.CARD, AutoSize = true, Location = new Point(16, 8) };
         descLabel = new Label { Text = desc, ForeColor = Theme.MUTED, Font = new Font("Segoe UI", 8.5f), BackColor = Theme.CARD, AutoSize = false, Bounds = new Rectangle(16, 30, 236, 18) };
-        toggle = Theme.Btn("OFF", new Rectangle(262, 12, 64, 32), Theme.CHIP, 9.5f);
+        toggle = Theme.Btn("OFF", new Rectangle(254, 12, 72, 32), Theme.CHIP, 9.5f);
         ((RoundButton)toggle).Radius = 16;
         p.Controls.AddRange(new Control[] { t, descLabel, toggle });
         return p;
@@ -1448,8 +1456,21 @@ public class MacroForm : Form
         new string[] { "DFIntCSGLevelOfDetailSwitchingDistanceL34", "0" }
     };
 
-    void ApplyFlags()
+    // POTATO: zusaetzlich so wenig Grafik wie Roblox erlaubt
+    static readonly string[][] PotatoFlags = {
+        new string[] { "DFIntDebugFRMQualityLevelOverride", "1" },  // Grafikqualitaet fest auf Stufe 1
+        new string[] { "DFFlagDebugPauseVoxelizer", "True" },        // Licht-Berechnung einfrieren (spart viel CPU)
+        new string[] { "FFlagDebugSkyGray", "True" },                // grauer Himmel statt Skybox
+        new string[] { "FIntDebugForceMSAASamples", "1" },           // keine Kantenglaettung
+        new string[] { "FIntGrassMovementReducedMotionFactor", "0" }
+    };
+
+    void ApplyFlags() { ApplyFlags(flagsLevel > 0 ? flagsLevel : 1); }
+
+    void ApplyFlags(int level)
     {
+        List<string[]> set = new List<string[]>(FpsFlags);
+        if (level >= 2) set.AddRange(PotatoFlags);
         int n = 0;
         foreach (string exe in RobloxExes())
         {
@@ -1471,7 +1492,7 @@ public class MacroForm : Form
                 if (inner.StartsWith("{") && inner.EndsWith("}")) inner = inner.Substring(1, inner.Length - 2).Trim();
                 else inner = "";
                 List<string> add = new List<string>();
-                foreach (string[] kv in FpsFlags)
+                foreach (string[] kv in set)
                     if (inner.IndexOf("\"" + kv[0] + "\"", StringComparison.Ordinal) < 0) // eigene Werte des Nutzers haben Vorrang
                         add.Add("  \"" + kv[0] + "\": \"" + kv[1] + "\"");
                 string body = (inner.Length > 0 ? "  " + inner : "");
@@ -1483,6 +1504,7 @@ public class MacroForm : Form
         }
         flagsCount = n;
         flagsOn = true;
+        flagsLevel = level;
     }
 
     void RemoveFlags()
@@ -1500,6 +1522,7 @@ public class MacroForm : Form
         }
         flagsOn = false;
         flagsCount = 0;
+        flagsLevel = 0;
     }
 
     void ApplyFps()
@@ -1609,8 +1632,9 @@ public class MacroForm : Form
         for (int i = 0; i < 4; i++) SetBack(presetBtns[i], i == preset ? Theme.ACCENT : Theme.CHIP);
 
         SetToggle(minBtn, autoMin);
-        SetToggle(flagsBtn, flagsOn);
-        SetText(flagsDesc, flagsOn ? "Active in " + flagsCount + " Roblox · restart Roblox" : "Low textures, no grass, less detail");
+        SetText(flagsBtn, FlagLevelNames[flagsLevel]);
+        SetBack(flagsBtn, flagsLevel > 0 ? Theme.ACCENT : Theme.CHIP);
+        SetText(flagsDesc, flagsLevel == 2 ? "Potato graphics · restart Roblox" : (flagsLevel == 1 ? "Low textures, no grass · restart Roblox" : "Tap: LOW → POTATO → OFF"));
         SetText(fpsModeBtn, fpsMode ? "ON" : "OFF");
         SetBack(fpsModeBtn, fpsMode ? Theme.ACCENT : Theme.CHIP);
         fpsCard.AccentBar = Color.Empty;
@@ -2296,7 +2320,7 @@ public class MacroForm : Form
                     case "automin": autoMin = v == 1; break;
                     case "fps": fpsOn = v == 1; break;
                     case "fpsmode": fpsModeSaved = v == 1; fpsModeKnown = true; break;
-                    case "flags": flagsOn = v == 1; break;
+                    case "flags": if (v >= 0 && v <= 2) { flagsLevel = v; flagsOn = v > 0; } break;
                     case "pgm": prevGameMode = v; break;
                     case "pdvr": prevDvr = v; break;
                     case "pcap": prevCapture = v; break;
@@ -2330,7 +2354,7 @@ public class MacroForm : Form
                 "automin=" + (autoMin ? 1 : 0),
                 "fps=" + (fpsOn ? 1 : 0),
                 "fpsmode=" + (fpsMode ? 1 : 0),
-                "flags=" + (flagsOn ? 1 : 0),
+                "flags=" + flagsLevel,
                 "pgm=" + prevGameMode,
                 "pdvr=" + prevDvr,
                 "pcap=" + prevCapture,
