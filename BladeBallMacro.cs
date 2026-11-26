@@ -20,8 +20,8 @@ using System.Text;
 [assembly: AssemblyProduct("BladeBall Macro")]
 [assembly: AssemblyCompany("Leo")]
 [assembly: AssemblyCopyright("Leo 2026")]
-[assembly: AssemblyVersion("1.1.24.0")]
-[assembly: AssemblyFileVersion("1.1.24.0")]
+[assembly: AssemblyVersion("1.2.25.0")]
+[assembly: AssemblyFileVersion("1.2.25.0")]
 
 // ================= Design =================
 static class Theme
@@ -677,8 +677,8 @@ public class MacroForm : Form
     public const string ACCESS_KEY = "Hallo";
 
     // Versionsnummer: bei jedem neuen Update um 1 erhoehen
-    public const int BUILD = 24;              // intern fuer Updates, immer +1
-    public const string VERSION_NAME = "1.1"; // angezeigte Version
+    public const int BUILD = 25;              // intern fuer Updates, immer +1
+    public const string VERSION_NAME = "1.2"; // angezeigte Version
 
     // >>> Online-Updates fuer Freunde: hier den Raw-Link zu deiner BladeBallMacro.cs auf GitHub eintragen <<<
     // Beispiel: https://raw.githubusercontent.com/DEINNAME/bladeball-macro/main/BladeBallMacro.cs
@@ -714,6 +714,8 @@ public class MacroForm : Form
     [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
     [DllImport("user32.dll")] static extern short GetAsyncKeyState(int vk);
     [DllImport("kernel32.dll")] static extern bool K32EmptyWorkingSet(IntPtr h);
+    [DllImport("user32.dll")] static extern UIntPtr SetTimer(IntPtr h, UIntPtr id, uint ms, IntPtr fn);
+    [DllImport("user32.dll")] static extern IntPtr FindWindow(string cls, string title);
     [DllImport("kernel32.dll")] static extern IntPtr CreateWaitableTimerExW(IntPtr attr, IntPtr name, uint flags, uint access);
     [DllImport("kernel32.dll")] static extern bool SetWaitableTimer(IntPtr h, ref long due, int period, IntPtr cb, IntPtr arg, bool resume);
     [DllImport("kernel32.dll")] static extern uint WaitForSingleObject(IntPtr h, uint ms);
@@ -763,9 +765,7 @@ public class MacroForm : Form
     readonly ManualResetEventSlim go = new ManualResetEventSlim(false);
     IntPtr hook = IntPtr.Zero;
     HookProc hookProc;
-    IntPtr lastFg = IntPtr.Zero;
-    bool lastFgRoblox = false;
-    readonly object fgLock = new object();
+    volatile int[] robloxPids = new int[0]; // vom Log-Watcher jede Sekunde aktualisiert
     string settingsPath;
     int refreshHz = 60;
     volatile int autoCps = 120;   // Smart-AUTO: passt sich live an diesen PC an
@@ -852,6 +852,7 @@ public class MacroForm : Form
         KeyPreview = true;
         DoubleBuffered = true;
 
+        Current = this;
         settingsPath = SettingsPath();
         DetectRefreshRate();
         LoadSettings();
@@ -1247,6 +1248,12 @@ public class MacroForm : Form
         if (!overlay.Visible) overlay.Show();
     }
 
+    // Hintergrund-Aufgabe, die bei einem Fehler nur protokolliert statt abzustuerzen
+    void Bg(ThreadStart a)
+    {
+        ThreadPool.QueueUserWorkItem(delegate { try { a(); } catch (Exception ex) { LogError(ex); } });
+    }
+
     // ---------- FPS MODE ----------
     // Hintergrund-Programme, die niemand zum Spielen braucht -> werden geschlossen
     static readonly string[] JunkApps = {
@@ -1254,7 +1261,11 @@ public class MacroForm : Form
         "epicgameslauncher", "epicwebhelper", "eadesktop", "battle.net", "riotclientservices", "riotclientux",
         "upc", "ubisoftconnect", "overwolf", "medal", "gamebar", "gamebarftserver", "xboxpcapp",
         "nvidia share", "ccxprocess", "creative cloud", "adobeipcbroker", "coresync", "acrotray",
-        "capcut", "wallpaper32", "wallpaper64", "lively", "copilot", "cortana" };
+        "wallpaper32", "wallpaper64", "lively", "copilot", "cortana" };
+
+    // Nur diese Apps geben RAM ab (Discord/Spotify nicht -> kein Knacksen im Call oder in der Musik)
+    static readonly HashSet<string> TrimApps = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
+        "chrome", "msedge", "firefox", "opera", "brave", "vivaldi", "steam", "steamwebhelper", "code", "msedgewebview2" };
 
     // Programme, die offen bleiben, aber weniger CPU bekommen als Roblox
     static readonly HashSet<string> SlowApps = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
@@ -1269,7 +1280,7 @@ public class MacroForm : Form
             EnableBoost();
             boostOn = boostActive;
             ApplyFps();
-            ThreadPool.QueueUserWorkItem(delegate { CloseJunk(); SlowBackground(); TrimBackground(); });
+            Bg(delegate { CloseJunk(); SlowBackground(); TrimBackground(); });
         }
         else
         {
@@ -1557,7 +1568,7 @@ public class MacroForm : Form
         if (fpsMode && clock.ElapsedMilliseconds - lastSweepMs > 15000)
         {
             lastSweepMs = clock.ElapsedMilliseconds;
-            ThreadPool.QueueUserWorkItem(delegate { if (fpsMode) SlowBackground(); });
+            Bg(delegate { if (fpsMode) SlowBackground(); });
         }
         if (robloxFront && !scannedInRoblox && !scanning && !running) { scannedInRoblox = true; StartScan(); }
         if (autoMin && WindowState != FormWindowState.Minimized && robloxFront)
@@ -1715,13 +1726,24 @@ public class MacroForm : Form
 
     void HookThread()
     {
-        hookProc = HookCb;
-        mouseProc = MouseCb;
+        hookProc = delegate(int n, IntPtr w, IntPtr l) { try { return HookCb(n, w, l); } catch { return CallNextHookEx(hook, n, w, l); } };
+        mouseProc = delegate(int n, IntPtr w, IntPtr l) { try { return MouseCb(n, w, l); } catch { return CallNextHookEx(mhook, n, w, l); } };
         IntPtr mod = GetModuleHandle(null);
         hook = SetWindowsHookEx(13, hookProc, mod, 0);
         mhook = SetWindowsHookEx(14, mouseProc, mod, 0);
+        // Windows entfernt Hooks stillschweigend, wenn der PC mal haengt -> jede Minute im Leerlauf neu setzen
+        SetTimer(IntPtr.Zero, UIntPtr.Zero, 60000, IntPtr.Zero);
         MSG m;
-        while (GetMessage(out m, IntPtr.Zero, 0, 0) > 0) { }
+        while (GetMessage(out m, IntPtr.Zero, 0, 0) > 0)
+        {
+            if (m.message == 0x0113 && !running && !hd1 && !hd2 && !capturing) // WM_TIMER
+            {
+                if (hook != IntPtr.Zero) UnhookWindowsHookEx(hook);
+                if (mhook != IntPtr.Zero) UnhookWindowsHookEx(mhook);
+                hook = SetWindowsHookEx(13, hookProc, mod, 0);
+                mhook = SetWindowsHookEx(14, mouseProc, mod, 0);
+            }
+        }
     }
 
     void HandleHot(int which, bool down, bool up)
@@ -1845,25 +1867,24 @@ public class MacroForm : Form
         return CallNextHookEx(mhook, n, w, l);
     }
 
+    // Laeuft im Hotkey-Hook -> muss extrem schnell sein (kein Lock, keine Prozess-Suche)
     bool RobloxForeground()
     {
         IntPtr fg = GetForegroundWindow();
-        lock (fgLock)
-        {
-            if (fg == lastFg) return lastFgRoblox;
-            bool r = false;
-            try
-            {
-                uint pid;
-                GetWindowThreadProcessId(fg, out pid);
-                using (Process p = Process.GetProcessById((int)pid))
-                    r = p.ProcessName.StartsWith("Roblox", StringComparison.OrdinalIgnoreCase);
-            }
-            catch { }
-            lastFg = fg;
-            lastFgRoblox = r;
-            return r;
-        }
+        if (fg == IntPtr.Zero) return false;
+        uint pid;
+        GetWindowThreadProcessId(fg, out pid);
+        int[] pids = robloxPids;
+        for (int i = 0; i < pids.Length; i++) if (pids[i] == (int)pid) return true;
+        return false;
+    }
+
+    void RefreshRobloxPids()
+    {
+        Process[] ps = Process.GetProcessesByName("RobloxPlayerBeta");
+        int[] ids = new int[ps.Length];
+        for (int i = 0; i < ps.Length; i++) { ids[i] = ps[i].Id; ps[i].Dispose(); }
+        robloxPids = ids;
     }
 
     // Präzises Warten: schläft, solange viel Zeit übrig ist, und wartet nur das letzte Stück aktiv
@@ -1905,6 +1926,20 @@ public class MacroForm : Form
     long winLate = 0;
 
     void Loop()
+    {
+        while (true)
+        {
+            try { LoopInner(); }
+            catch (Exception ex)
+            {
+                LogError(ex);
+                StopFromWorker();
+                Thread.Sleep(100);
+            }
+        }
+    }
+
+    void LoopInner()
     {
         try { uint idx = 0; AvSetMmThreadCharacteristicsW("Games", ref idx); } catch { }
         int size = Marshal.SizeOf(typeof(INPUT));
@@ -1986,6 +2021,11 @@ public class MacroForm : Form
 
     void Benchmark()
     {
+        try { BenchmarkInner(); } catch (Exception ex) { LogError(ex); scanning = false; }
+    }
+
+    void BenchmarkInner()
+    {
         scanning = true;
         pcInfo = "scanning...";
         Thread.Sleep(500);
@@ -2035,13 +2075,14 @@ public class MacroForm : Form
         while (true)
         {
             try { PollLog(); } catch { }
-            Thread.Sleep(gameState == 1 ? 1500 : 1000);
+            Thread.Sleep(1000);
         }
     }
 
     void PollLog()
     {
-        if (!RobloxRunning())
+        RefreshRobloxPids();
+        if (robloxPids.Length == 0)
         {
             gameState = 0;
             logPath = null;
@@ -2104,7 +2145,7 @@ public class MacroForm : Form
     void OnBladeBallJoined()
     {
         if (!fpsMode) return;
-        ThreadPool.QueueUserWorkItem(delegate { CloseJunk(); SlowBackground(); TrimBackground(); });
+        Bg(delegate { CloseJunk(); SlowBackground(); TrimBackground(); });
     }
 
     // Gibt Arbeitsspeicher von Hintergrund-Apps frei -> mehr RAM fuer Roblox (hilft vor allem bei 4-8 GB)
@@ -2117,7 +2158,7 @@ public class MacroForm : Form
         {
             try
             {
-                if (p.SessionId == session && SlowApps.Contains(p.ProcessName))
+                if (p.SessionId == session && TrimApps.Contains(p.ProcessName))
                 {
                     long before = p.WorkingSet64;
                     if (K32EmptyWorkingSet(p.Handle))
@@ -2367,10 +2408,32 @@ public class MacroForm : Form
             if (File.Exists(old)) File.Delete(old);
             File.Move(exe, old);
             File.Move(tmp, exe);
-            Process.Start(exe);
+            Process.Start(exe, "--updated");
             Shutdown();
         }
         catch (Exception ex) { MessageBox.Show("Update failed:\n" + ex.Message); }
+    }
+
+    public static MacroForm Current;
+
+    public static void LogError(Exception ex)
+    {
+        if (ex == null) return;
+        try
+        {
+            string f = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "error.log");
+            if (File.Exists(f) && new FileInfo(f).Length > 200000) File.Delete(f);
+            File.AppendAllText(f, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "  v" + VERSION_NAME + "  " + ex + Environment.NewLine + Environment.NewLine);
+        }
+        catch { }
+    }
+
+    // Bei einem Absturz: Energieplan, Prioritaeten und gedrueckte Taste zuruecksetzen
+    public void EmergencyRestore()
+    {
+        try { running = false; KeyInputs k = keys; if (k != null) SendInput((uint)k.Up.Length, k.Up, Marshal.SizeOf(typeof(INPUT))); } catch { }
+        try { DisableBoost(); } catch { }
+        try { RestoreBackground(); } catch { }
     }
 
     void Shutdown()
@@ -2388,11 +2451,38 @@ public class MacroForm : Form
     protected override void OnFormClosing(FormClosingEventArgs e) { SaveSettings(); base.OnFormClosing(e); }
     protected override void OnFormClosed(FormClosedEventArgs e) { base.OnFormClosed(e); Shutdown(); }
 
+    static Mutex instance;
+
     [STAThread]
     static void Main()
     {
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
+
+        Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+        Application.ThreadException += delegate(object s, ThreadExceptionEventArgs e) { LogError(e.Exception); };
+        AppDomain.CurrentDomain.UnhandledException += delegate(object s, UnhandledExceptionEventArgs e)
+        {
+            LogError(e.ExceptionObject as Exception);
+            if (Current != null) Current.EmergencyRestore();
+        };
+
+        bool created;
+        instance = new Mutex(true, "BladeBallMacro_SingleInstance", out created);
+        if (!created)
+        {
+            bool updated = Array.IndexOf(Environment.GetCommandLineArgs(), "--updated") >= 0;
+            bool got;
+            try { got = instance.WaitOne(updated ? 8000 : 3000); }
+            catch (AbandonedMutexException) { got = true; }
+            if (!got)
+            {
+                // laeuft schon -> vorhandenes Fenster nach vorne holen
+                IntPtr h = FindWindow(null, "BladeBall Macro");
+                if (h != IntPtr.Zero) { ShowWindow(h, 9); SetForegroundWindow(h); }
+                return;
+            }
+        }
         try { string old = Application.ExecutablePath + ".old"; if (File.Exists(old)) File.Delete(old); } catch { }
 
         if (ReadSavedKey() == ACCESS_KEY) RememberKey = true;
@@ -2405,5 +2495,6 @@ public class MacroForm : Form
             }
         }
         Application.Run(new MacroForm());
+        GC.KeepAlive(instance);
     }
 }
