@@ -20,8 +20,8 @@ using System.Text;
 [assembly: AssemblyProduct("BladeBall Macro")]
 [assembly: AssemblyCompany("Leo")]
 [assembly: AssemblyCopyright("Leo 2026")]
-[assembly: AssemblyVersion("1.5.28.0")]
-[assembly: AssemblyFileVersion("1.5.28.0")]
+[assembly: AssemblyVersion("1.6.29.0")]
+[assembly: AssemblyFileVersion("1.6.29.0")]
 
 // ================= Design =================
 static class Theme
@@ -282,6 +282,35 @@ public class GlassBackdrop : Form
         base.OnSizeChanged(e);
         if (!Glass.IsWin11() && Width > 0)
             using (GraphicsPath p = Glass.Rounded(new Rectangle(0, 0, Width, Height), 12)) Region = new Region(p);
+    }
+}
+
+// ================= Dunkles Dropdown-Menue =================
+public class DarkColors : ProfessionalColorTable
+{
+    static readonly Color Bg = Color.FromArgb(28, 28, 32), Sel = Color.FromArgb(58, 58, 66), Edge = Color.FromArgb(70, 70, 78);
+    public override Color ToolStripDropDownBackground { get { return Bg; } }
+    public override Color ImageMarginGradientBegin { get { return Bg; } }
+    public override Color ImageMarginGradientMiddle { get { return Bg; } }
+    public override Color ImageMarginGradientEnd { get { return Bg; } }
+    public override Color MenuBorder { get { return Edge; } }
+    public override Color MenuItemBorder { get { return Sel; } }
+    public override Color MenuItemSelected { get { return Sel; } }
+    public override Color CheckBackground { get { return Bg; } }
+    public override Color CheckSelectedBackground { get { return Sel; } }
+    public override Color CheckPressedBackground { get { return Sel; } }
+    public override Color SeparatorDark { get { return Edge; } }
+    public override Color SeparatorLight { get { return Bg; } }
+}
+
+public class DarkRenderer : ToolStripProfessionalRenderer
+{
+    public DarkRenderer() : base(new DarkColors()) { RoundedEdges = true; }
+    protected override void OnRenderItemCheck(ToolStripItemImageRenderEventArgs e)
+    {
+        Rectangle r = new Rectangle(e.ImageRectangle.X + 3, e.ImageRectangle.Y + e.ImageRectangle.Height / 2 - 3, 7, 7);
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        using (SolidBrush b = new SolidBrush(Color.White)) e.Graphics.FillEllipse(b, r);
     }
 }
 
@@ -677,8 +706,8 @@ public class MacroForm : Form
     public const string ACCESS_KEY = "Hallo";
 
     // Versionsnummer: bei jedem neuen Update um 1 erhoehen
-    public const int BUILD = 28;              // intern fuer Updates, immer +1
-    public const string VERSION_NAME = "1.5"; // angezeigte Version
+    public const int BUILD = 29;              // intern fuer Updates, immer +1
+    public const string VERSION_NAME = "1.6"; // angezeigte Version
 
     // >>> Online-Updates fuer Freunde: hier den Raw-Link zu deiner BladeBallMacro.cs auf GitHub eintragen <<<
     // Beispiel: https://raw.githubusercontent.com/DEINNAME/bladeball-macro/main/BladeBallMacro.cs
@@ -808,7 +837,9 @@ public class MacroForm : Form
     Label flagsDesc;
     bool flagsOn = false;
     int flagsLevel = 0; // 0 aus, 1 LOW, 2 POTATO
-    static readonly string[] FlagLevelNames = { "OFF", "LOW", "POTATO", "POTATO+" };
+    static readonly string[] FlagLevelNames = { "OFF", "LOW", "POTATO", "POTATO+", "POTATO++" };
+    static readonly string[] FlagLevelInfo = { "normal graphics", "low textures, no grass", "lowest Roblox graphics", "+ 720p in Blade Ball", "+ lowest resolution (very pixelated)" };
+    int resLevel = 0;
     bool resChanged = false;   // POTATO+: Aufloesung gerade gesenkt
     int prevCap = 0;
     int flagsCount = 0;
@@ -1047,19 +1078,29 @@ public class MacroForm : Form
         boostPage.Controls.Add(Row(142, "Roblox FPS Flags", "", out flagsBtn, out flagsDesc));
         boostPage.Controls.Add(Row(202, "Auto-Minimize", "Hides when Roblox is focused", out minBtn, out dummy));
         boostPage.Controls.Add(Row(262, "Online Update", "", out updBtn, out updDesc));
+        flagsBtn.Bounds = new Rectangle(206, 12, 120, 32);
+        flagsDesc.Width = 186;
+        // Ein Menue fuer immer (wird nur einmal gebaut)
+        ContextMenuStrip menu = new ContextMenuStrip();
+        menu.Renderer = new DarkRenderer();
+        menu.ShowImageMargin = true;
+        menu.Font = new Font("Segoe UI", 10f);
+        ToolStripMenuItem[] gfxItems = new ToolStripMenuItem[FlagLevelNames.Length];
+        for (int i = 0; i < FlagLevelNames.Length; i++)
+        {
+            int lvl = i;
+            ToolStripMenuItem it = new ToolStripMenuItem(FlagLevelNames[i] + "   ·   " + FlagLevelInfo[i]);
+            it.ForeColor = Color.White;
+            it.Padding = new Padding(2, 5, 2, 5);
+            it.Click += delegate { SetGraphicsLevel(lvl); };
+            if (i == 3) menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add(it);
+            gfxItems[i] = it;
+        }
         flagsBtn.Click += delegate
         {
-            int next = (flagsLevel + 1) % 4;
-            if (next == 0) RemoveFlags(); else ApplyFlags(next);
-            if (next < 3) RestoreResolution();
-            else if (gameState == 1) LowerResolution();
-            RefreshUi(true);
-            SaveSettings();
-            // Flags wirken erst nach einem Roblox-Neustart -> direkt anbieten
-            if (next < 3 && robloxPids.Length > 0 &&
-                MessageBox.Show("Restart Roblox now so the new graphics apply?\nYou will rejoin Blade Ball (new server).", "BladeBall Macro",
-                    MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
-                RestartRoblox();
+            for (int i = 0; i < gfxItems.Length; i++) gfxItems[i].Checked = i == flagsLevel;
+            menu.Show(flagsBtn, new Point(flagsBtn.Width - 2, flagsBtn.Height + 4), ToolStripDropDownDirection.BelowLeft);
         };
         updBtn.Text = "CHECK";
         updBtn.BackColor = Theme.ACCENT;
@@ -1536,6 +1577,23 @@ public class MacroForm : Form
         RestoreFramerateCap();
     }
 
+    // ---------- Grafikstufe setzen (Dropdown) ----------
+    void SetGraphicsLevel(int next)
+    {
+        int old = flagsLevel;
+        if (next == old) return;
+        if (next == 0) RemoveFlags(); else ApplyFlags(next);
+        if (next < 3) RestoreResolution();
+        else if (gameState == 1) Bg(delegate { LowerResolution(); });
+        RefreshUi(true);
+        SaveSettings();
+        // Flag-Set geaendert -> wirkt erst nach Roblox-Neustart (POTATO / + / ++ nutzen dasselbe Set)
+        if (Math.Min(next, 2) != Math.Min(old, 2) && robloxPids.Length > 0 &&
+            MessageBox.Show("Restart Roblox now so the new graphics apply?\nYou will rejoin Blade Ball (new server).", "BladeBall Macro",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+            RestartRoblox();
+    }
+
     // ---------- Roblox neu starten (Flags werden nur beim Start gelesen) ----------
     void RestartRoblox()
     {
@@ -1625,7 +1683,10 @@ public class MacroForm : Form
     {
         lock (resLock)
         {
-            if (resChanged) return;
+            int lvl = flagsLevel;
+            if (lvl < 3) return;
+            if (resChanged && resLevel == lvl) return;
+            if (resChanged) { try { ChangeDisplaySettingsReset(IntPtr.Zero, 0); } catch { } resChanged = false; }
             try
             {
                 DEVMODE cur = new DEVMODE();
@@ -1637,8 +1698,18 @@ public class MacroForm : Form
                 dm.dmSize = cur.dmSize;
                 for (int i = 0; EnumDisplaySettings(null, i, ref dm); i++)
                 {
-                    // gleiches Seitenverhaeltnis, ca. 2/3 der Breite (1920x1080 -> 1280x720), nicht kleiner als 960
                     if (dm.dmBitsPerPel != cur.dmBitsPerPel) continue;
+                    if (lvl >= 4)
+                    {
+                        // POTATO++: kleinste Aufloesung, die der Bildschirm kann (meist 640x480 oder 800x600)
+                        if (dm.dmPelsWidth < 640 || dm.dmPelsHeight < 480) continue;
+                        long px = (long)dm.dmPelsWidth * dm.dmPelsHeight, bpx = (long)best.dmPelsWidth * best.dmPelsHeight;
+                        bool smaller = !found || px < bpx ||
+                            (px == bpx && Math.Abs(dm.dmDisplayFrequency - cur.dmDisplayFrequency) < Math.Abs(best.dmDisplayFrequency - cur.dmDisplayFrequency));
+                        if (smaller) { best = dm; found = true; }
+                        continue;
+                    }
+                    // POTATO+: gleiches Seitenverhaeltnis, ca. 2/3 der Breite (1920x1080 -> 1280x720), nicht kleiner als 960
                     if ((long)dm.dmPelsWidth * cur.dmPelsHeight != (long)dm.dmPelsHeight * cur.dmPelsWidth) continue;
                     if (dm.dmPelsWidth > cur.dmPelsWidth * 7 / 10 || dm.dmPelsWidth < 960) continue;
                     bool better = !found || dm.dmPelsWidth > best.dmPelsWidth ||
@@ -1647,7 +1718,7 @@ public class MacroForm : Form
                 }
                 if (!found) return;
                 best.dmFields = 0x80000 | 0x100000 | 0x400000; // Breite | Hoehe | Frequenz
-                if (ChangeDisplaySettings(ref best, 0x4) == 0) resChanged = true; // 0x4 = nur voruebergehend
+                if (ChangeDisplaySettings(ref best, 0x4) == 0) { resChanged = true; resLevel = lvl; } // 0x4 = nur voruebergehend
             }
             catch (Exception ex) { LogError(ex); }
         }
@@ -1770,10 +1841,9 @@ public class MacroForm : Form
         for (int i = 0; i < 4; i++) SetBack(presetBtns[i], i == preset ? Theme.ACCENT : Theme.CHIP);
 
         SetToggle(minBtn, autoMin);
-        SetText(flagsBtn, FlagLevelNames[flagsLevel]);
+        SetText(flagsBtn, FlagLevelNames[flagsLevel] + "  ▾");
         SetBack(flagsBtn, flagsLevel > 0 ? Theme.ACCENT : Theme.CHIP);
-        string[] fd = { "Tap: LOW → POTATO → POTATO+", "Low textures, no grass", "Lowest graphics Roblox allows", "+ 720p while in Blade Ball" };
-        SetText(flagsDesc, fd[flagsLevel]);
+        SetText(flagsDesc, flagsLevel == 0 ? "Pick a graphics level" : FlagLevelInfo[flagsLevel]);
         SetText(fpsModeBtn, fpsMode ? "ON" : "OFF");
         SetBack(fpsModeBtn, fpsMode ? Theme.ACCENT : Theme.CHIP);
         fpsCard.AccentBar = Color.Empty;
@@ -2354,7 +2424,7 @@ public class MacroForm : Form
             int before = gameState;
             foreach (string line in text.Split('\n')) ParseLogLine(line);
             if (before != 1 && gameState == 1) OnBladeBallJoined();
-            if (gameState == 1 && flagsLevel == 3) LowerResolution();
+            if (gameState == 1 && flagsLevel >= 3) LowerResolution();
             else if (gameState != 1) RestoreResolution();
         }
     }
@@ -2462,7 +2532,7 @@ public class MacroForm : Form
                     case "automin": autoMin = v == 1; break;
                     case "fps": fpsOn = v == 1; break;
                     case "fpsmode": fpsModeSaved = v == 1; fpsModeKnown = true; break;
-                    case "flags": if (v >= 0 && v <= 3) { flagsLevel = v; flagsOn = v > 0; } break;
+                    case "flags": if (v >= 0 && v <= 4) { flagsLevel = v; flagsOn = v > 0; } break;
                     case "prevcap": prevCap = v; break;
                     case "pgm": prevGameMode = v; break;
                     case "pdvr": prevDvr = v; break;
