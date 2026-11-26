@@ -20,8 +20,8 @@ using System.Text;
 [assembly: AssemblyProduct("BladeBall Macro")]
 [assembly: AssemblyCompany("Leo")]
 [assembly: AssemblyCopyright("Leo 2026")]
-[assembly: AssemblyVersion("1.4.27.0")]
-[assembly: AssemblyFileVersion("1.4.27.0")]
+[assembly: AssemblyVersion("1.5.28.0")]
+[assembly: AssemblyFileVersion("1.5.28.0")]
 
 // ================= Design =================
 static class Theme
@@ -677,8 +677,8 @@ public class MacroForm : Form
     public const string ACCESS_KEY = "Hallo";
 
     // Versionsnummer: bei jedem neuen Update um 1 erhoehen
-    public const int BUILD = 27;              // intern fuer Updates, immer +1
-    public const string VERSION_NAME = "1.4"; // angezeigte Version
+    public const int BUILD = 28;              // intern fuer Updates, immer +1
+    public const string VERSION_NAME = "1.5"; // angezeigte Version
 
     // >>> Online-Updates fuer Freunde: hier den Raw-Link zu deiner BladeBallMacro.cs auf GitHub eintragen <<<
     // Beispiel: https://raw.githubusercontent.com/DEINNAME/bladeball-macro/main/BladeBallMacro.cs
@@ -808,7 +808,9 @@ public class MacroForm : Form
     Label flagsDesc;
     bool flagsOn = false;
     int flagsLevel = 0; // 0 aus, 1 LOW, 2 POTATO
-    static readonly string[] FlagLevelNames = { "OFF", "LOW", "POTATO" };
+    static readonly string[] FlagLevelNames = { "OFF", "LOW", "POTATO", "POTATO+" };
+    bool resChanged = false;   // POTATO+: Aufloesung gerade gesenkt
+    int prevCap = 0;
     int flagsCount = 0;
     Label bladeDesc;
 
@@ -1047,10 +1049,17 @@ public class MacroForm : Form
         boostPage.Controls.Add(Row(262, "Online Update", "", out updBtn, out updDesc));
         flagsBtn.Click += delegate
         {
-            int next = (flagsLevel + 1) % 3;
+            int next = (flagsLevel + 1) % 4;
             if (next == 0) RemoveFlags(); else ApplyFlags(next);
+            if (next < 3) RestoreResolution();
+            else if (gameState == 1) LowerResolution();
             RefreshUi(true);
             SaveSettings();
+            // Flags wirken erst nach einem Roblox-Neustart -> direkt anbieten
+            if (next < 3 && robloxPids.Length > 0 &&
+                MessageBox.Show("Restart Roblox now so the new graphics apply?\nYou will rejoin Blade Ball (new server).", "BladeBall Macro",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+                RestartRoblox();
         };
         updBtn.Text = "CHECK";
         updBtn.BackColor = Theme.ACCENT;
@@ -1505,6 +1514,7 @@ public class MacroForm : Form
         flagsCount = n;
         flagsOn = true;
         flagsLevel = level;
+        RaiseFramerateCap();
     }
 
     void RemoveFlags()
@@ -1523,6 +1533,134 @@ public class MacroForm : Form
         flagsOn = false;
         flagsCount = 0;
         flagsLevel = 0;
+        RestoreFramerateCap();
+    }
+
+    // ---------- Roblox neu starten (Flags werden nur beim Start gelesen) ----------
+    void RestartRoblox()
+    {
+        Bg(delegate
+        {
+            RefreshRobloxPids();
+            List<Process> ps = new List<Process>();
+            foreach (int id in robloxPids)
+            {
+                try { Process p = Process.GetProcessById(id); p.CloseMainWindow(); ps.Add(p); } catch { }
+            }
+            Stopwatch w = Stopwatch.StartNew();
+            foreach (Process p in ps)
+            {
+                try
+                {
+                    int left = (int)Math.Max(0, 5000 - w.ElapsedMilliseconds);
+                    if (!p.WaitForExit(left)) p.Kill();
+                }
+                catch { }
+                p.Dispose();
+            }
+            Thread.Sleep(1200);           // Roblox schreibt beim Beenden seine Einstellungen
+            RaiseFramerateCap();
+            Process.Start("roblox://experiences/start?placeId=13772394625");
+        });
+    }
+
+    // Roblox' eigenes FPS-Limit (Einstellungen > Maximale Bildrate) auf 240 anheben.
+    // Nur wenn Roblox zu ist, sonst ueberschreibt Roblox die Datei beim Beenden.
+    static string BasicSettingsPath()
+    {
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Roblox\GlobalBasicSettings_13.xml");
+    }
+
+    void RaiseFramerateCap()
+    {
+        try
+        {
+            if (RobloxRunning()) return;
+            string f = BasicSettingsPath();
+            if (!File.Exists(f)) return;
+            string x = File.ReadAllText(f);
+            Match m = Regex.Match(x, "<int name=\"FramerateCap\">(-?[0-9]+)</int>");
+            int cur;
+            if (!m.Success || !int.TryParse(m.Groups[1].Value, out cur) || cur <= 0 || cur >= 240) return; // 0/-1 = unbekannt/unbegrenzt -> nicht anfassen
+            prevCap = cur;
+            File.WriteAllText(f, x.Replace(m.Value, "<int name=\"FramerateCap\">240</int>"), new UTF8Encoding(false));
+        }
+        catch (Exception ex) { LogError(ex); }
+    }
+
+    void RestoreFramerateCap()
+    {
+        try
+        {
+            if (prevCap <= 0 || RobloxRunning()) return;
+            string f = BasicSettingsPath();
+            if (!File.Exists(f)) return;
+            string x = File.ReadAllText(f);
+            string y = Regex.Replace(x, "<int name=\"FramerateCap\">240</int>", "<int name=\"FramerateCap\">" + prevCap + "</int>");
+            if (y != x) File.WriteAllText(f, y, new UTF8Encoding(false));
+            prevCap = 0;
+        }
+        catch (Exception ex) { LogError(ex); }
+    }
+
+    // ---------- POTATO+: niedrigere Bildschirm-Aufloesung, solange du in Blade Ball bist ----------
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+    struct DEVMODE
+    {
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
+        public short dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra;
+        public int dmFields, dmPositionX, dmPositionY, dmDisplayOrientation, dmDisplayFixedOutput;
+        public short dmColor, dmDuplex, dmYResolution, dmTTOption, dmCollate;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName;
+        public short dmLogPixels;
+        public int dmBitsPerPel, dmPelsWidth, dmPelsHeight, dmDisplayFlags, dmDisplayFrequency;
+        public int dmICMMethod, dmICMIntent, dmMediaType, dmDitherType, dmReserved1, dmReserved2, dmPanningWidth, dmPanningHeight;
+    }
+    [DllImport("user32.dll", CharSet = CharSet.Ansi)] static extern bool EnumDisplaySettings(string dev, int mode, ref DEVMODE dm);
+    [DllImport("user32.dll", CharSet = CharSet.Ansi)] static extern int ChangeDisplaySettings(ref DEVMODE dm, int flags);
+    [DllImport("user32.dll", EntryPoint = "ChangeDisplaySettingsA")] static extern int ChangeDisplaySettingsReset(IntPtr dm, int flags);
+    readonly object resLock = new object();
+
+    void LowerResolution()
+    {
+        lock (resLock)
+        {
+            if (resChanged) return;
+            try
+            {
+                DEVMODE cur = new DEVMODE();
+                cur.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE));
+                if (!EnumDisplaySettings(null, -1, ref cur)) return; // aktueller Modus
+                DEVMODE best = new DEVMODE();
+                bool found = false;
+                DEVMODE dm = new DEVMODE();
+                dm.dmSize = cur.dmSize;
+                for (int i = 0; EnumDisplaySettings(null, i, ref dm); i++)
+                {
+                    // gleiches Seitenverhaeltnis, ca. 2/3 der Breite (1920x1080 -> 1280x720), nicht kleiner als 960
+                    if (dm.dmBitsPerPel != cur.dmBitsPerPel) continue;
+                    if ((long)dm.dmPelsWidth * cur.dmPelsHeight != (long)dm.dmPelsHeight * cur.dmPelsWidth) continue;
+                    if (dm.dmPelsWidth > cur.dmPelsWidth * 7 / 10 || dm.dmPelsWidth < 960) continue;
+                    bool better = !found || dm.dmPelsWidth > best.dmPelsWidth ||
+                        (dm.dmPelsWidth == best.dmPelsWidth && Math.Abs(dm.dmDisplayFrequency - cur.dmDisplayFrequency) < Math.Abs(best.dmDisplayFrequency - cur.dmDisplayFrequency));
+                    if (better) { best = dm; found = true; }
+                }
+                if (!found) return;
+                best.dmFields = 0x80000 | 0x100000 | 0x400000; // Breite | Hoehe | Frequenz
+                if (ChangeDisplaySettings(ref best, 0x4) == 0) resChanged = true; // 0x4 = nur voruebergehend
+            }
+            catch (Exception ex) { LogError(ex); }
+        }
+    }
+
+    void RestoreResolution()
+    {
+        lock (resLock)
+        {
+            if (!resChanged) return;
+            try { ChangeDisplaySettingsReset(IntPtr.Zero, 0); } catch { }
+            resChanged = false;
+        }
     }
 
     void ApplyFps()
@@ -1634,7 +1772,8 @@ public class MacroForm : Form
         SetToggle(minBtn, autoMin);
         SetText(flagsBtn, FlagLevelNames[flagsLevel]);
         SetBack(flagsBtn, flagsLevel > 0 ? Theme.ACCENT : Theme.CHIP);
-        SetText(flagsDesc, flagsLevel == 2 ? "Potato graphics · restart Roblox" : (flagsLevel == 1 ? "Low textures, no grass · restart Roblox" : "Tap: LOW → POTATO → OFF"));
+        string[] fd = { "Tap: LOW → POTATO → POTATO+", "Low textures, no grass", "Lowest graphics Roblox allows", "+ 720p while in Blade Ball" };
+        SetText(flagsDesc, fd[flagsLevel]);
         SetText(fpsModeBtn, fpsMode ? "ON" : "OFF");
         SetBack(fpsModeBtn, fpsMode ? Theme.ACCENT : Theme.CHIP);
         fpsCard.AccentBar = Color.Empty;
@@ -2186,6 +2325,7 @@ public class MacroForm : Form
         {
             gameState = 0;
             logPath = null;
+            RestoreResolution();
             return;
         }
         string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Roblox\logs");
@@ -2214,6 +2354,8 @@ public class MacroForm : Form
             int before = gameState;
             foreach (string line in text.Split('\n')) ParseLogLine(line);
             if (before != 1 && gameState == 1) OnBladeBallJoined();
+            if (gameState == 1 && flagsLevel == 3) LowerResolution();
+            else if (gameState != 1) RestoreResolution();
         }
     }
 
@@ -2320,7 +2462,8 @@ public class MacroForm : Form
                     case "automin": autoMin = v == 1; break;
                     case "fps": fpsOn = v == 1; break;
                     case "fpsmode": fpsModeSaved = v == 1; fpsModeKnown = true; break;
-                    case "flags": if (v >= 0 && v <= 2) { flagsLevel = v; flagsOn = v > 0; } break;
+                    case "flags": if (v >= 0 && v <= 3) { flagsLevel = v; flagsOn = v > 0; } break;
+                    case "prevcap": prevCap = v; break;
                     case "pgm": prevGameMode = v; break;
                     case "pdvr": prevDvr = v; break;
                     case "pcap": prevCapture = v; break;
@@ -2355,6 +2498,7 @@ public class MacroForm : Form
                 "fps=" + (fpsOn ? 1 : 0),
                 "fpsmode=" + (fpsMode ? 1 : 0),
                 "flags=" + flagsLevel,
+                "prevcap=" + prevCap,
                 "pgm=" + prevGameMode,
                 "pdvr=" + prevDvr,
                 "pcap=" + prevCapture,
@@ -2536,6 +2680,7 @@ public class MacroForm : Form
         try { running = false; KeyInputs k = keys; if (k != null) SendInput((uint)k.Up.Length, k.Up, Marshal.SizeOf(typeof(INPUT))); } catch { }
         try { DisableBoost(); } catch { }
         try { RestoreBackground(); } catch { }
+        try { RestoreResolution(); } catch { }
     }
 
     void Shutdown()
@@ -2547,6 +2692,7 @@ public class MacroForm : Form
         if (periodOn) { timeEndPeriod(1); periodOn = false; }
         DisableBoost();
         RestoreBackground();
+        RestoreResolution();
         Environment.Exit(0);
     }
 
