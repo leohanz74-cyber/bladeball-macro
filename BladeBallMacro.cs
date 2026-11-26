@@ -20,8 +20,8 @@ using System.Text;
 [assembly: AssemblyProduct("BladeBall Macro")]
 [assembly: AssemblyCompany("Leo")]
 [assembly: AssemblyCopyright("Leo 2026")]
-[assembly: AssemblyVersion("1.8.31.0")]
-[assembly: AssemblyFileVersion("1.8.31.0")]
+[assembly: AssemblyVersion("1.9.32.0")]
+[assembly: AssemblyFileVersion("1.9.32.0")]
 
 // ================= Design =================
 static class Theme
@@ -706,8 +706,8 @@ public class MacroForm : Form
     public const string ACCESS_KEY = "Hallo";
 
     // Versionsnummer: bei jedem neuen Update um 1 erhoehen
-    public const int BUILD = 31;              // intern fuer Updates, immer +1
-    public const string VERSION_NAME = "1.8"; // angezeigte Version
+    public const int BUILD = 32;              // intern fuer Updates, immer +1
+    public const string VERSION_NAME = "1.9"; // angezeigte Version
 
     // >>> Online-Updates fuer Freunde: hier den Raw-Link zu deiner BladeBallMacro.cs auf GitHub eintragen <<<
     // Beispiel: https://raw.githubusercontent.com/DEINNAME/bladeball-macro/main/BladeBallMacro.cs
@@ -916,7 +916,7 @@ public class MacroForm : Form
         LocationChanged += delegate { SyncGlass(); };
         SizeChanged += delegate { SyncGlass(); };
         Activated += delegate { SyncGlass(); };
-        Shown += delegate { SyncGlass(); };
+        Shown += delegate { FitToScreen(); SyncGlass(); };
         // FPS MODE fasst Energieplan + FPS-Tweaks zusammen (alte Einstellungen werden uebernommen)
         bool startFps = fpsModeKnown ? fpsModeSaved : (boostOn || fpsOn);
         if (fpsOn && !startFps) RemoveFps();
@@ -1139,6 +1139,7 @@ public class MacroForm : Form
         panicBtn.Click += delegate { panicOn = !panicOn; RefreshUi(true); SaveSettings(); };
 
         Controls.AddRange(new Control[] { bar, status, tabs, macroPage, boostPage, extrasPage });
+
     }
 
     RoundPanel Row(int y, string title, string desc, out Button toggle, out Label descLabel)
@@ -2868,6 +2869,45 @@ public class MacroForm : Form
         RestoreBackground();
         RestoreResolution();
         Environment.Exit(0);
+    }
+
+    // Fenster passt nicht auf den Bildschirm (kleine Aufloesung, Laptop mit 125-150 % Skalierung)
+    // -> kuerzer machen und mit Mausrad / Scrollleiste scrollbar machen
+    const int FULL_HEIGHT = 580;
+
+    void FitToScreen()
+    {
+        try
+        {
+            Rectangle wa = Screen.FromControl(this).WorkingArea;
+            int target = Math.Min(FULL_HEIGHT, wa.Height - 8);
+            if (target < FULL_HEIGHT)
+            {
+                AutoScroll = true;
+                AutoScrollMinSize = new Size(0, FULL_HEIGHT);
+                VerticalScroll.SmallChange = 30;
+            }
+            else
+            {
+                AutoScrollPosition = new Point(0, 0);
+                AutoScroll = false;
+            }
+            if (ClientSize.Height != target) ClientSize = new Size(380, target);
+            if (!Glass.IsWin11())
+                using (GraphicsPath rp = Glass.Rounded(new Rectangle(0, 0, Width, Height), 12)) Region = new Region(rp);
+            // komplett sichtbar halten
+            int x = Math.Max(wa.Left, Math.Min(Left, wa.Right - Width));
+            int y = Math.Max(wa.Top, Math.Min(Top, wa.Bottom - Height));
+            if (x != Left || y != Top) Location = new Point(x, y);
+            SyncGlass();
+        }
+        catch (Exception ex) { LogError(ex); }
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        base.WndProc(ref m);
+        if (m.Msg == 0x007E) BeginInvoke((MethodInvoker)delegate { FitToScreen(); }); // WM_DISPLAYCHANGE: Aufloesung geaendert
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e) { SaveSettings(); base.OnFormClosing(e); }
