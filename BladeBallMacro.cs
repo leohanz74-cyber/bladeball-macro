@@ -20,8 +20,8 @@ using System.Text;
 [assembly: AssemblyProduct("BladeBall Macro")]
 [assembly: AssemblyCompany("Leo")]
 [assembly: AssemblyCopyright("Leo 2026")]
-[assembly: AssemblyVersion("2.1.34.0")]
-[assembly: AssemblyFileVersion("2.1.34.0")]
+[assembly: AssemblyVersion("2.2.35.0")]
+[assembly: AssemblyFileVersion("2.2.35.0")]
 
 // ================= Design =================
 static class Theme
@@ -706,8 +706,8 @@ public class MacroForm : Form
     public const string ACCESS_KEY = "Hallo";
 
     // Versionsnummer: bei jedem neuen Update um 1 erhoehen
-    public const int BUILD = 34;              // intern fuer Updates, immer +1
-    public const string VERSION_NAME = "2.1"; // angezeigte Version
+    public const int BUILD = 35;              // intern fuer Updates, immer +1
+    public const string VERSION_NAME = "2.2"; // angezeigte Version
 
     // >>> Online-Updates fuer Freunde: hier den Raw-Link zu deiner BladeBallMacro.cs auf GitHub eintragen <<<
     // Beispiel: https://raw.githubusercontent.com/DEINNAME/bladeball-macro/main/BladeBallMacro.cs
@@ -762,9 +762,9 @@ public class MacroForm : Form
 
     // ---------- Einstellungen (Standard = beste Settings) ----------
     static readonly string[] ModeNames = { "HOLD", "TOGGLE" };
-    static readonly string[] PresetNames = { "AUTO", "ECO", "BALANCED", "MAX" };
-    static readonly string[] PresetHints = { "scans your PC", "low-end PCs", "strong PCs", "high-end only" };
-    int[] presetCps = { 120, 60, 240, 1000 };
+    static readonly string[] PresetNames = { "AUTO", "60", "120", "240" };
+    static readonly string[] PresetHints = { "", "fixed · low-end", "fixed", "fixed · high-end" };
+    int[] presetCps = { 300, 60, 120, 240 };
 
     Keys spamKey = Keys.F, hotKey = Keys.E, hotKey2 = Keys.None;
     volatile bool hd1 = false, hd2 = false; // welcher Hotkey gerade gehalten wird
@@ -803,7 +803,6 @@ public class MacroForm : Form
     volatile int autoCps = 120;   // Smart-AUTO: passt sich live an diesen PC an
     int autoMax = 120;
     volatile bool scanning = false;
-    bool scannedInRoblox = false;
     volatile int autoFloor = 90;  // SMART geht nie tiefer als das
     string pcInfo = "";
 
@@ -980,17 +979,17 @@ public class MacroForm : Form
         return 240;
     }
 
+    // Clash-Rate: 1,25 Druecke pro Roblox-Bild -> kein Bild ohne Parry, auch wenn das Timing etwas schwankt
+    static int AutoRate(int fpsCap) { return Math.Max(75, Math.Min(300, (int)Math.Round(fpsCap * 1.25))); }
+
     // Grenze neu setzen, wenn sich Roblox' FPS-Limit geaendert hat (z. B. nach den FPS-Flags)
     void UpdateAutoMax()
     {
-        int m = RobloxFpsLimit();
+        int m = AutoRate(RobloxFpsLimit());
         if (m == autoMax) return;
-        bool up = m > autoMax;
         autoMax = m;
         presetCps[0] = m;
-        if (autoCps > m) autoCps = m;
-        if (autoBest > m) autoBest = m;
-        if (up && !scanning) StartScan();
+        StartScan();
     }
 
     void DetectRefreshRate()
@@ -1004,7 +1003,7 @@ public class MacroForm : Form
         }
         catch { }
         // AUTO: ein Druck pro Roblox-Bild. Grenze = Roblox' eigenes FPS-Limit (max. 240).
-        autoMax = RobloxFpsLimit();
+        autoMax = AutoRate(RobloxFpsLimit());
         presetCps[0] = autoMax;
     }
 
@@ -1094,8 +1093,6 @@ public class MacroForm : Form
         hot2Chip = Theme.Btn("NONE", new Rectangle(190, 12, 136, 36), Theme.CHIP, 11f);
         hot2Chip.Click += delegate { StartCapture(3); };
         h2Card.Controls.AddRange(new Control[] { scanText, hot2Chip });
-        perfValue.Cursor = Cursors.Hand;
-        perfValue.Click += delegate { StartScan(); };
         macroPage.Controls.AddRange(new Control[] { modeCard, hc, sc, perf, h2Card });
 
         // ---------- Seite BOOST ----------
@@ -2003,7 +2000,7 @@ public class MacroForm : Form
         RefreshBladeRow();
 
         string pv = presetCps[preset] + "/s · " + PresetHints[preset];
-        if (preset == 0) pv = scanning ? "scanning..." : "AUTO " + autoCps + "/s · rescan";
+        if (preset == 0) pv = "AUTO " + autoCps + "/s · clash";
         SetText(perfValue, pv);
         if (captureTarget != 2) SetText(hotChip, KeyName(hotKey));
         if (captureTarget != 3) SetText(hot2Chip, hotKey2 == Keys.None ? "NONE" : KeyName(hotKey2));
@@ -2024,7 +2021,6 @@ public class MacroForm : Form
             lastSweepMs = clock.ElapsedMilliseconds;
             Bg(delegate { if (fpsMode) SlowBackground(); });
         }
-        if (robloxFront && !scannedInRoblox && !scanning && !running) { scannedInRoblox = true; StartScan(); }
         if (autoMin && WindowState != FormWindowState.Minimized && robloxFront)
             WindowState = FormWindowState.Minimized;
         if (WindowState == FormWindowState.Minimized) { tickWatch.Restart(); lastCount = Interlocked.Read(ref count); return; } // minimiert = keine UI-Arbeit
@@ -2035,7 +2031,7 @@ public class MacroForm : Form
         lastCount = c;
         cpsSmooth = cpsSmooth * 0.6 + cps * 0.4;
         if (cpsSmooth < 1) cpsSmooth = 0;
-        if (preset == 0) SetText(perfValue, scanning ? "scanning..." : "AUTO " + autoCps + "/s · rescan");
+        if (preset == 0) SetText(perfValue, "AUTO " + autoCps + "/s · clash");
 
         RefreshUpdateRow();
         RefreshBladeRow();
@@ -2165,6 +2161,8 @@ public class MacroForm : Form
         KeyInputs k = new KeyInputs { Down = new INPUT[1], Up = new INPUT[1] };
         k.Down[0].type = 1; k.Down[0].U.ki.wScan = sc; k.Down[0].U.ki.dwFlags = KEYEVENTF_SCANCODE | ext;
         k.Up[0].type = 1; k.Up[0].U.ki.wScan = sc; k.Up[0].U.ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP | ext;
+        k.Down[0].U.ki.dwExtraInfo = (IntPtr)INJECT_MAGIC;
+        k.Up[0].U.ki.dwExtraInfo = (IntPtr)INJECT_MAGIC;
         keys = k;
     }
 
@@ -2193,12 +2191,107 @@ public class MacroForm : Form
         return IsMouseKey(hotKey) || IsMouseKey(hotKey2) || (capturing && (captureTarget == 2 || captureTarget == 3));
     }
 
-    // laeuft auf dem Hook-Thread
-    void UpdateMouseHook(IntPtr mod)
+    // ---------- Raw Input ----------
+    const int INJECT_MAGIC = 0x0BBA11;      // markiert unsere eigenen F-Druecke
+    volatile bool useRaw = false;          // true = Raw Input aktiv, kein Hook im Eingabeweg
+    volatile bool rawTestOk = false;
+    bool rawMouseOn = false;
+    InputWindow inputWnd;
+    IntPtr rawBuf = IntPtr.Zero;
+    int rawHdr = 24;
+
+    [StructLayout(LayoutKind.Sequential)] struct RAWINPUTDEVICE { public ushort usUsagePage; public ushort usUsage; public uint dwFlags; public IntPtr hwndTarget; }
+    [DllImport("user32.dll", SetLastError = true)] static extern bool RegisterRawInputDevices(RAWINPUTDEVICE[] d, uint n, uint size);
+    [DllImport("user32.dll")] static extern uint GetRawInputData(IntPtr h, uint cmd, IntPtr data, ref uint size, uint hdr);
+    [DllImport("user32.dll")] static extern IntPtr DispatchMessage(ref MSG m);
+    [DllImport("user32.dll")] static extern bool KillTimer(IntPtr h, UIntPtr id);
+
+    // unsichtbares Fenster, das die Raw-Input-Nachrichten bekommt
+    class InputWindow : NativeWindow
+    {
+        readonly MacroForm owner;
+        public InputWindow(MacroForm o)
+        {
+            owner = o;
+            CreateParams cp = new CreateParams();
+            cp.Caption = "BladeBallMacroInput";
+            cp.Style = unchecked((int)0x80000000); // WS_POPUP, nicht sichtbar
+            cp.ExStyle = 0x80;                      // WS_EX_TOOLWINDOW
+            CreateHandle(cp);
+        }
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == 0x00FF) owner.OnRawInput(m.LParam); // WM_INPUT
+            base.WndProc(ref m);
+        }
+    }
+
+    bool RegisterRawDevice(ushort usage, bool on)
+    {
+        RAWINPUTDEVICE[] d = { new RAWINPUTDEVICE { usUsagePage = 1, usUsage = usage, dwFlags = on ? 0x100u : 0x1u, hwndTarget = on ? inputWnd.Handle : IntPtr.Zero } }; // INPUTSINK / REMOVE
+        return RegisterRawInputDevices(d, 1, (uint)Marshal.SizeOf(typeof(RAWINPUTDEVICE)));
+    }
+
+    void SendTestKey()
+    {
+        INPUT[] t = new INPUT[2];
+        t[0].type = 1; t[0].U.ki.wVk = 0x87; t[0].U.ki.dwExtraInfo = (IntPtr)INJECT_MAGIC; // F24 gibt es auf keiner Tastatur
+        t[1] = t[0]; t[1].U.ki.dwFlags = KEYEVENTF_KEYUP;
+        SendInput(2, t, Marshal.SizeOf(typeof(INPUT)));
+    }
+
+    internal void OnRawInput(IntPtr h)
+    {
+        uint size = 128;
+        if (GetRawInputData(h, 0x10000003, rawBuf, ref size, (uint)rawHdr) == uint.MaxValue) return; // RID_INPUT
+        int type = Marshal.ReadInt32(rawBuf, 0);
+        IntPtr dev = Marshal.ReadIntPtr(rawBuf, 8);
+        if (type == 1) // Tastatur
+        {
+            int make = Marshal.ReadInt16(rawBuf, rawHdr) & 0xFFFF;
+            int fl = Marshal.ReadInt16(rawBuf, rawHdr + 2) & 0xFFFF;
+            uint vk = (uint)(Marshal.ReadInt16(rawBuf, rawHdr + 6) & 0xFFFF);
+            int extra = Marshal.ReadInt32(rawBuf, rawHdr + 12);
+            if (vk == 0x87 && (dev == IntPtr.Zero || extra == INJECT_MAGIC)) { rawTestOk = true; return; } // Selbsttest angekommen
+            if (!useRaw || vk == 0xFF) return;
+            if (extra == INJECT_MAGIC || (dev == IntPtr.Zero && vk == (uint)spamKey)) return; // eigener Spam
+            bool up = (fl & 1) != 0;
+            OnKey(vk, make, (fl & 2) != 0, !up, up);
+        }
+        else if (type == 0 && useRaw) // Maus (nur registriert, wenn eine Maustaste Hotkey ist)
+        {
+            int bf = Marshal.ReadInt16(rawBuf, rawHdr + 4) & 0xFFFF;
+            if ((bf & 0x0010) != 0) OnMouseButton(Keys.MButton, true);
+            if ((bf & 0x0020) != 0) OnMouseButton(Keys.MButton, false);
+            if ((bf & 0x0040) != 0) OnMouseButton(Keys.XButton1, true);
+            if ((bf & 0x0080) != 0) OnMouseButton(Keys.XButton1, false);
+            if ((bf & 0x0100) != 0) OnMouseButton(Keys.XButton2, true);
+            if ((bf & 0x0200) != 0) OnMouseButton(Keys.XButton2, false);
+        }
+    }
+
+    // laeuft auf dem Eingabe-Thread: Maus nur ueberwachen, wenn eine Maustaste Hotkey ist
+    void UpdateMouseInput(IntPtr mod)
     {
         bool need = MouseHookNeeded();
-        if (need && mhook == IntPtr.Zero) mhook = SetWindowsHookEx(14, mouseProc, mod, 0);
-        else if (!need && mhook != IntPtr.Zero) { UnhookWindowsHookEx(mhook); mhook = IntPtr.Zero; }
+        if (useRaw)
+        {
+            if (mhook != IntPtr.Zero) { UnhookWindowsHookEx(mhook); mhook = IntPtr.Zero; }
+            if (need != rawMouseOn) { RegisterRawDevice(2, need); rawMouseOn = need; }
+        }
+        else
+        {
+            if (need && mhook == IntPtr.Zero) mhook = SetWindowsHookEx(14, mouseProc, mod, 0);
+            else if (!need && mhook != IntPtr.Zero) { UnhookWindowsHookEx(mhook); mhook = IntPtr.Zero; }
+        }
+    }
+
+    void EnableHookMode(IntPtr mod)
+    {
+        useRaw = false;
+        if (rawMouseOn) { try { RegisterRawDevice(2, false); } catch { } rawMouseOn = false; }
+        if (hook == IntPtr.Zero) hook = SetWindowsHookEx(13, hookProc, mod, 0);
+        UpdateMouseInput(mod);
     }
 
     void RequestMouseHookUpdate()
@@ -2212,22 +2305,103 @@ public class MacroForm : Form
         hookProc = delegate(int n, IntPtr w, IntPtr l) { try { return HookCb(n, w, l); } catch { return CallNextHookEx(hook, n, w, l); } };
         mouseProc = delegate(int n, IntPtr w, IntPtr l) { try { return MouseCb(n, w, l); } catch { return CallNextHookEx(mhook, n, w, l); } };
         IntPtr mod = GetModuleHandle(null);
-        hook = SetWindowsHookEx(13, hookProc, mod, 0);
-        UpdateMouseHook(mod);
-        // Windows entfernt Hooks stillschweigend, wenn der PC mal haengt -> jede Minute im Leerlauf neu setzen
-        SetTimer(IntPtr.Zero, UIntPtr.Zero, 60000, IntPtr.Zero);
+        rawHdr = IntPtr.Size == 8 ? 24 : 16;
+        rawBuf = Marshal.AllocHGlobal(128);
+
+        bool raw = false;
+        try { inputWnd = new InputWindow(this); raw = RegisterRawDevice(6, true); } // Tastatur
+        catch (Exception ex) { LogError(ex); }
+
+        UIntPtr testTimer = UIntPtr.Zero;
+        if (raw)
+        {
+            useRaw = true;
+            UpdateMouseInput(mod);
+            SendTestKey();                                                  // kommt die Test-Taste per Raw Input an?
+            testTimer = SetTimer(IntPtr.Zero, UIntPtr.Zero, 1500, IntPtr.Zero);
+        }
+        else EnableHookMode(mod);
+
+        // Hook-Modus: Windows entfernt Hooks stillschweigend, wenn der PC mal haengt -> jede Minute im Leerlauf neu setzen
+        UIntPtr rehook = SetTimer(IntPtr.Zero, UIntPtr.Zero, 60000, IntPtr.Zero);
         MSG m;
         while (GetMessage(out m, IntPtr.Zero, 0, 0) > 0)
         {
-            if (m.message == WM_UPDATE_MOUSEHOOK) { UpdateMouseHook(mod); continue; }
-            if (m.message == 0x0113 && !running && !hd1 && !hd2 && !capturing) // WM_TIMER
+            if (m.hwnd == IntPtr.Zero)
             {
-                if (hook != IntPtr.Zero) UnhookWindowsHookEx(hook);
-                if (mhook != IntPtr.Zero) { UnhookWindowsHookEx(mhook); mhook = IntPtr.Zero; }
-                hook = SetWindowsHookEx(13, hookProc, mod, 0);
-                UpdateMouseHook(mod);
+                if (m.message == WM_UPDATE_MOUSEHOOK) { UpdateMouseInput(mod); continue; }
+                if (m.message == 0x0113) // WM_TIMER
+                {
+                    ulong id = (ulong)m.wParam.ToInt64();
+                    if (testTimer != UIntPtr.Zero && id == testTimer.ToUInt64())
+                    {
+                        KillTimer(IntPtr.Zero, testTimer);
+                        testTimer = UIntPtr.Zero;
+                        if (!rawTestOk) { LogInfo("Raw input test failed -> keyboard hook mode"); EnableHookMode(mod); }
+                        continue;
+                    }
+                    if (id == rehook.ToUInt64() && !useRaw && !running && !hd1 && !hd2 && !capturing)
+                    {
+                        if (hook != IntPtr.Zero) UnhookWindowsHookEx(hook);
+                        if (mhook != IntPtr.Zero) { UnhookWindowsHookEx(mhook); mhook = IntPtr.Zero; }
+                        hook = SetWindowsHookEx(13, hookProc, mod, 0);
+                        UpdateMouseInput(mod);
+                    }
+                    continue;
+                }
+            }
+            DispatchMessage(ref m);
+        }
+    }
+
+    // gemeinsame Tasten-Logik (Raw Input und Hook)
+    void OnKey(uint vk, int scan, bool extended, bool down, bool up)
+    {
+        if (capturing) return;
+        if (down)
+        {
+            if (vk == 0x77 && resChanged && hotKey != Keys.F8 && spamKey != Keys.F8)
+            {
+                resUserOff = true; // Notausgang: F8 holt die normale Aufloesung zurueck
+                Bg(delegate { RestoreResolution(); });
+            }
+            else if (panicOn && vk == 0x77 && hotKey != Keys.F8 && spamKey != Keys.F8)
+            {
+                try { BeginInvoke((MethodInvoker)delegate { SetArmed(!armed); }); } catch { }
+            }
+            else if (chatProtect && RobloxForeground()) // Chat-Schutz
+            {
+                if (!chatOpen && IsChatKey(vk, scan, extended ? 1 : 0))
+                {
+                    chatOpen = true;
+                    Interlocked.Exchange(ref chatSince, clock.ElapsedTicks);
+                    if (running) SetRunning(false);
+                    Play(sndChat);
+                }
+                else if (chatOpen && (vk == 0x0D || vk == 0x1B)) chatOpen = false;
             }
         }
+        if (hotKey2 != Keys.None && vk == (uint)hotKey2) HandleHot(2, down, up);
+        if (vk == (uint)hotKey) HandleHot(1, down, up);
+    }
+
+    // gemeinsame Maustasten-Logik
+    void OnMouseButton(Keys btn, bool down)
+    {
+        if (capturing && (captureTarget == 2 || captureTarget == 3))
+        {
+            if (down)
+            {
+                if (captureTarget == 2) { if (btn != hotKey2) hotKey = btn; }
+                else if (btn != hotKey) hotKey2 = btn;
+                capturing = false;
+                BeginInvoke((MethodInvoker)delegate { captureTarget = 0; RequestMouseHookUpdate(); RefreshUi(true); SaveSettings(); });
+            }
+            return;
+        }
+        if (capturing) return;
+        if (btn == hotKey) HandleHot(1, down, !down);
+        else if (hotKey2 != Keys.None && btn == hotKey2) HandleHot(2, down, !down);
     }
 
     void HandleHot(int which, bool down, bool up)
@@ -2255,48 +2429,17 @@ public class MacroForm : Form
         }
     }
 
+    // Ersatz-Modus (nur wenn Raw Input nicht klappt)
     IntPtr HookCb(int n, IntPtr w, IntPtr l)
     {
-        if (n >= 0 && !capturing)
+        if (n >= 0 && !useRaw)
         {
             uint vk = (uint)Marshal.ReadInt32(l);
             int scan = Marshal.ReadInt32(l, 4);
             int flags = Marshal.ReadInt32(l, 8);
             int kmsg = w.ToInt32();
-            bool kdown = kmsg == 0x100 || kmsg == 0x104;
-            if ((flags & 0x10) == 0 && kdown)
-            {
-                // Panik-Taste F8: ganzes Macro an/aus
-                if (vk == 0x77 && resChanged && hotKey != Keys.F8 && spamKey != Keys.F8)
-                {
-                    // Notausgang: F8 holt sofort die normale Aufloesung zurueck
-                    resUserOff = true;
-                    Bg(delegate { RestoreResolution(); });
-                }
-                else if (panicOn && vk == 0x77 && hotKey != Keys.F8 && spamKey != Keys.F8)
-                {
-                    try { BeginInvoke((MethodInvoker)delegate { SetArmed(!armed); }); } catch { }
-                }
-                // Chat-Schutz: "/" oeffnet den Roblox-Chat, Enter/Esc schliesst ihn
-                else if (chatProtect && RobloxForeground())
-                {
-                    if (!chatOpen && IsChatKey(vk, scan, flags))
-                    {
-                        chatOpen = true;
-                        Interlocked.Exchange(ref chatSince, clock.ElapsedTicks);
-                        if (running) SetRunning(false);
-                        Play(sndChat);
-                    }
-                    else if (chatOpen && (vk == 0x0D || vk == 0x1B)) chatOpen = false;
-                }
-            }
-            if ((flags & 0x10) == 0 && hotKey2 != Keys.None && vk == (uint)hotKey2)
-                HandleHot(2, kdown, kmsg == 0x101 || kmsg == 0x105);
-            if ((flags & 0x10) == 0 && vk == (uint)hotKey)
-            {
-                int msg = w.ToInt32();
-                HandleHot(1, msg == 0x100 || msg == 0x104, msg == 0x101 || msg == 0x105);
-            }
+            if ((flags & 0x10) == 0) // eigene simulierte Tasten ignorieren
+                OnKey(vk, scan, (flags & 1) != 0, kmsg == 0x100 || kmsg == 0x104, kmsg == 0x101 || kmsg == 0x105);
         }
         return CallNextHookEx(hook, n, w, l);
     }
@@ -2313,44 +2456,21 @@ public class MacroForm : Form
         return false;
     }
 
-    // Maustasten als Hotkey: Mausrad-Klick, Seitentasten (Maus 4/5)
+    // Maustasten im Ersatz-Modus: Mausrad-Klick, Seitentasten (Maus 4/5)
     IntPtr MouseCb(int n, IntPtr w, IntPtr l)
     {
-        if (n >= 0)
+        if (n >= 0 && !useRaw)
         {
             int msg = w.ToInt32();
             int flags = Marshal.ReadInt32(l, 12);
-            if ((flags & 1) == 0) // eigene simulierte Klicks ignorieren
+            if ((flags & 1) == 0)
             {
-                Keys btn = Keys.None;
-                bool down = false;
                 if (msg == 0x020B || msg == 0x020C)
                 {
                     int x = (Marshal.ReadInt32(l, 8) >> 16) & 0xFFFF;
-                    btn = x == 1 ? Keys.XButton1 : Keys.XButton2;
-                    down = msg == 0x020B;
+                    OnMouseButton(x == 1 ? Keys.XButton1 : Keys.XButton2, msg == 0x020B);
                 }
-                else if (msg == 0x0207 || msg == 0x0208)
-                {
-                    btn = Keys.MButton;
-                    down = msg == 0x0207;
-                }
-                if (btn != Keys.None)
-                {
-                    if (capturing && (captureTarget == 2 || captureTarget == 3))
-                    {
-                        if (down)
-                        {
-                            if (captureTarget == 2) { if (btn != hotKey2) hotKey = btn; }
-                            else if (btn != hotKey) hotKey2 = btn;
-                            capturing = false;
-                            BeginInvoke((MethodInvoker)delegate { captureTarget = 0; RequestMouseHookUpdate(); RefreshUi(true); SaveSettings(); });
-                        }
-                        return (IntPtr)1;
-                    }
-                    if (!capturing && btn == hotKey) HandleHot(1, down, !down);
-                    else if (!capturing && hotKey2 != Keys.None && btn == hotKey2) HandleHot(2, down, !down);
-                }
+                else if (msg == 0x0207 || msg == 0x0208) OnMouseButton(Keys.MButton, msg == 0x0207);
             }
         }
         return CallNextHookEx(mhook, n, w, l);
@@ -2495,66 +2615,12 @@ public class MacroForm : Form
         }
     }
 
-    // ================= AUTO-Scan =================
-    // Testet echte Spam-Raten von 240 abwaerts (ohne Tasten zu druecken) und nimmt
-    // die hoechste, die dieser PC gerade sauber halten kann.
-    static readonly int[] ScanRates = { 240, 200, 165, 144, 120, 100, 90, 60 };
-
+    // AUTO braucht keinen PC-Test mehr: volle Clash-Rate sofort
     void StartScan()
     {
-        if (scanning) return;
-        scanning = true;
-        Thread t = new Thread(Benchmark);
-        t.IsBackground = true;
-        t.Priority = ThreadPriority.Normal;
-        t.Start();
-    }
-
-    void Benchmark()
-    {
-        try { BenchmarkInner(); } catch (Exception ex) { LogError(ex); scanning = false; }
-    }
-
-    void BenchmarkInner()
-    {
-        scanning = true;
-        pcInfo = "scanning...";
-        Thread.Sleep(500);
-        long freq = Stopwatch.Frequency;
-        int cores = Environment.ProcessorCount;
-        int best = 60;
-        timeBeginPeriod(1);
-        try
-        {
-            foreach (int rate in ScanRates)
-            {
-                if (rate > autoMax) continue;
-                pcInfo = "testing " + rate + "/s...";
-                long interval = freq / rate;
-                long late = 0;
-                int cycles = Math.Max(60, rate / 2); // ca. 0,5 s pro Stufe
-                long t0 = clock.ElapsedTicks + interval;
-                for (int c = 0; c < cycles; c++)
-                {
-                    WaitUntil(t0, false);
-                    late += Math.Max(0, clock.ElapsedTicks - t0);
-                    long half = t0 + interval / 2;
-                    WaitUntil(half, false);
-                    late += Math.Max(0, clock.ElapsedTicks - half);
-                    t0 += interval;
-                    long now = clock.ElapsedTicks;
-                    if (t0 < now) { late += now - t0; t0 = now; }
-                }
-                double ratio = (double)late / (cycles * (double)interval);
-                if (ratio < 0.25) { best = rate; break; }
-            }
-        }
-        finally { timeEndPeriod(1); }
-
-        autoFloor = Math.Min(best, cores <= 2 ? 60 : 90);
-        autoCps = best;
-        autoBest = best;
-        pcInfo = "best: " + best + "/s · " + (hiResTimer ? "hi-res timer" : "std timer") + (RobloxRunning() ? " · in game" : "");
+        autoBest = autoMax;
+        autoCps = autoMax;
+        autoFloor = Math.Min(60, autoMax);
         scanning = false;
     }
 
