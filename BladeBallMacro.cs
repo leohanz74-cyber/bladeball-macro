@@ -20,8 +20,8 @@ using System.Text;
 [assembly: AssemblyProduct("BladeBall Macro")]
 [assembly: AssemblyCompany("Leo")]
 [assembly: AssemblyCopyright("Leo 2026")]
-[assembly: AssemblyVersion("2.2.35.0")]
-[assembly: AssemblyFileVersion("2.2.35.0")]
+[assembly: AssemblyVersion("2.2.36.0")]
+[assembly: AssemblyFileVersion("2.2.36.0")]
 
 // ================= Design =================
 static class Theme
@@ -706,8 +706,8 @@ public class MacroForm : Form
     public const string ACCESS_KEY = "Hallo";
 
     // Versionsnummer: bei jedem neuen Update um 1 erhoehen
-    public const int BUILD = 35;              // intern fuer Updates, immer +1
-    public const string VERSION_NAME = "2.2"; // angezeigte Version
+    public const int BUILD = 36;              // intern fuer Updates, immer +1
+    public const string VERSION_NAME = "2.2.1"; // angezeigte Version
 
     // >>> Online-Updates fuer Freunde: hier den Raw-Link zu deiner BladeBallMacro.cs auf GitHub eintragen <<<
     // Beispiel: https://raw.githubusercontent.com/DEINNAME/bladeball-macro/main/BladeBallMacro.cs
@@ -2057,7 +2057,7 @@ public class MacroForm : Form
         if (running)
             SetText(statsText, "Live " + (int)cpsSmooth + "/s   ·   clash " + ((clock.ElapsedTicks - Interlocked.Read(ref runStart)) / (double)Stopwatch.Frequency).ToString("0.0") + " s");
         else
-            SetText(statsText, "Clashes " + clashes + "   ·   Best " + bestClash.ToString("0.0") + " s   ·   Response " + (respMs >= 0 ? respMs.ToString("0.00") + " ms" : "—"));
+            SetText(statsText, "Clashes " + clashes + "  ·  Best " + bestClash.ToString("0.0") + " s  ·  " + (respMs >= 0 ? respMs.ToString("0.00") + " ms" : "— ms") + "  ·  " + (useRaw ? "RAW" : "HOOK"));
         RefreshUi(false);
     }
 
