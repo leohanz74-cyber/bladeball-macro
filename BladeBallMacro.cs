@@ -20,8 +20,8 @@ using System.Text;
 [assembly: AssemblyProduct("BladeBall Macro")]
 [assembly: AssemblyCompany("Leo")]
 [assembly: AssemblyCopyright("Leo 2026")]
-[assembly: AssemblyVersion("1.9.32.0")]
-[assembly: AssemblyFileVersion("1.9.32.0")]
+[assembly: AssemblyVersion("2.0.33.0")]
+[assembly: AssemblyFileVersion("2.0.33.0")]
 
 // ================= Design =================
 static class Theme
@@ -706,8 +706,8 @@ public class MacroForm : Form
     public const string ACCESS_KEY = "Hallo";
 
     // Versionsnummer: bei jedem neuen Update um 1 erhoehen
-    public const int BUILD = 32;              // intern fuer Updates, immer +1
-    public const string VERSION_NAME = "1.9"; // angezeigte Version
+    public const int BUILD = 33;              // intern fuer Updates, immer +1
+    public const string VERSION_NAME = "2.0"; // angezeigte Version
 
     // >>> Online-Updates fuer Freunde: hier den Raw-Link zu deiner BladeBallMacro.cs auf GitHub eintragen <<<
     // Beispiel: https://raw.githubusercontent.com/DEINNAME/bladeball-macro/main/BladeBallMacro.cs
@@ -834,7 +834,8 @@ public class MacroForm : Form
     double respMs = -1;
     int clashes = 0;
     double bestClash = 0;
-    long ovLastCount = 0, ovLastMs = 0;
+    long ovLastCount = 0, ovLastMs = 0, ovUntil = 0;
+    string ovKey = "";
     int ovRate = 0;
     Button hot2Chip, bladeBtn, flagsBtn;
     Label flagsDesc;
@@ -859,7 +860,6 @@ public class MacroForm : Form
     string logPath = null;
     long logPos = 0;
     long freedMb = 0;
-    bool selfTrimmed = false;
     string remoteSrc = null;
     bool fpsOn = false;
     int prevGameMode = -2, prevDvr = -2, prevCapture = -2; // -2 = noch nicht gesichert, -1 = war nicht gesetzt
@@ -916,6 +916,7 @@ public class MacroForm : Form
         LocationChanged += delegate { SyncGlass(); };
         SizeChanged += delegate { SyncGlass(); };
         Activated += delegate { SyncGlass(); };
+        Deactivate += delegate { SyncGlass(); };
         Shown += delegate { FitToScreen(); SyncGlass(); };
         // FPS MODE fasst Energieplan + FPS-Tweaks zusammen (alte Einstellungen werden uebernommen)
         bool startFps = fpsModeKnown ? fpsModeSaved : (boostOn || fpsOn);
@@ -1121,7 +1122,7 @@ public class MacroForm : Form
         extrasPage = new Panel { Bounds = new Rectangle(20, 222, 340, 340), BackColor = Theme.BG, Visible = false };
         Label d2;
         extrasPage.Controls.Add(Row(0, "Chat Protection", "Pauses while you type (/ or -)", out chatBtn, out d2));
-        RoundPanel ovRow = Row(60, "In-Game Overlay", "Status pill in the top bar", out ovlBtn, out d2);
+        RoundPanel ovRow = Row(60, "In-Game Overlay", "Shows briefly when status changes", out ovlBtn, out d2);
         d2.Width = 165;
         ovlPosBtn = Theme.Btn(PosArrows[0], new Rectangle(188, 12, 58, 32), Theme.CHIP, 12f);
         ((RoundButton)ovlPosBtn).Radius = 16;
@@ -1285,27 +1286,26 @@ public class MacroForm : Form
         if (!overlayOn || !front || !GameOk())
         {
             if (overlay.Visible) overlay.Hide();
+            ovKey = "";
+            return;
+        }
+
+        // Zustand: kurz einblenden (2,5 s), waehrend des Spammens NIE (sonst ein Frame mehr Input-Lag)
+        string key = !armed ? "OFF" : (chatOpen ? "CHAT" : (running ? "RUN" : "READY"));
+        long nowMs = clock.ElapsedMilliseconds;
+        if (key != ovKey) { ovKey = key; ovUntil = nowMs + 2500; }
+        bool show = key == "CHAT" || (key != "RUN" && nowMs < ovUntil);
+        if (!show)
+        {
+            if (overlay.Visible) overlay.Hide();
             return;
         }
 
         string t;
         Color c;
-        if (!armed) { t = "OFF"; c = Theme.MUTED; }
-        else if (chatOpen) { t = "CHAT · paused"; c = Theme.WARN; }
-        else if (running)
-        {
-            long now = clock.ElapsedMilliseconds;
-            if (now - ovLastMs >= 400)
-            {
-                long cnt = Interlocked.Read(ref count);
-                if (ovLastMs > 0) ovRate = (int)((cnt - ovLastCount) * 1000 / Math.Max(1, now - ovLastMs));
-                ovLastCount = cnt;
-                ovLastMs = now;
-            }
-            t = "SPAMMING" + (ovRate > 0 ? " · " + ovRate + "/s" : "");
-            c = Theme.OK;
-        }
-        else { t = "READY · " + KeyName(hotKey); c = Theme.ACCENT; ovLastMs = 0; ovRate = 0; }
+        if (key == "OFF") { t = "OFF"; c = Theme.MUTED; }
+        else if (key == "CHAT") { t = "CHAT · paused"; c = Theme.WARN; }
+        else { t = "READY · " + KeyName(hotKey); c = Theme.ACCENT; }
         overlay.SetState(t, c);
 
         Rectangle b = Screen.FromHandle(GetForegroundWindow()).Bounds;
@@ -1899,10 +1899,14 @@ public class MacroForm : Form
         if (WindowState == FormWindowState.Minimized || !Visible)
         {
             if (backdrop.Visible) backdrop.Hide();
-            if (!selfTrimmed) { selfTrimmed = true; TrimSelf(); }
             return;
         }
-        selfTrimmed = false;
+        // Glas nie ueber dem laufenden Spiel weichzeichnen (kostet GPU)
+        if (RobloxForeground())
+        {
+            if (backdrop.Visible) backdrop.Hide();
+            return;
+        }
         if (!backdrop.Visible) backdrop.Show();
         SetWindowPos(backdrop.Handle, Handle, Left, Top, Width, Height, 0x0010); // SWP_NOACTIVATE, direkt hinter dem Macro
     }
@@ -1973,7 +1977,8 @@ public class MacroForm : Form
     void Tick()
     {
         lock (runLock) { if (!running && periodOn) { timeEndPeriod(1); periodOn = false; } }
-        bool robloxFront = RobloxForeground(); // haelt den Cache aktuell -> Hotkey reagiert sofort
+        bool robloxFront = RobloxForeground();
+        if (robloxFront && backdrop != null && backdrop.Visible) SyncGlass(); // kein Glas-Blur ueber dem Spiel
         if (fpsMode && clock.ElapsedMilliseconds - lastSweepMs > 15000)
         {
             lastSweepMs = clock.ElapsedMilliseconds;
@@ -2496,9 +2501,13 @@ public class MacroForm : Form
         }
     }
 
+    int pollCount = 0;
+
     void PollLog()
     {
-        RefreshRobloxPids();
+        pollCount++;
+        // Prozessliste nur alle 3 s (solange Roblox laeuft), sonst jede Sekunde
+        if (robloxPids.Length == 0 || pollCount % 3 == 0) RefreshRobloxPids();
         if (robloxPids.Length == 0)
         {
             gameState = 0;
@@ -2507,13 +2516,19 @@ public class MacroForm : Form
         }
         string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Roblox\logs");
         if (!Directory.Exists(dir)) return;
+        // Log-Ordner nur alle 5 s neu durchsuchen
+        if (logPath != null && pollCount % 5 != 0 && File.Exists(logPath)) { ReadLogTail(); return; }
         FileInfo newest = null;
         foreach (FileInfo f in new DirectoryInfo(dir).GetFiles("*.log"))
             if (f.Name.IndexOf("Player", StringComparison.OrdinalIgnoreCase) >= 0 && f.Name.IndexOf("CrashHandler", StringComparison.OrdinalIgnoreCase) < 0 && (newest == null || f.LastWriteTimeUtc > newest.LastWriteTimeUtc))
                 newest = f;
         if (newest == null) return;
         if (newest.FullName != logPath) { logPath = newest.FullName; logPos = 0; lastPlace = 0; }
+        ReadLogTail();
+    }
 
+    void ReadLogTail()
+    {
         using (FileStream fs = new FileStream(logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
         {
             long len = fs.Length;
@@ -2589,21 +2604,6 @@ public class MacroForm : Form
             finally { p.Dispose(); }
         }
         freedMb += freed / 1048576;
-    }
-
-    // Das Macro selbst schrumpft, wenn es minimiert ist (wenige MB statt ~40 MB)
-    void TrimSelf()
-    {
-        ThreadPool.QueueUserWorkItem(delegate
-        {
-            try
-            {
-                GC.Collect();
-                GC.WaitForPendingFinalizers();
-                using (Process me = Process.GetCurrentProcess()) K32EmptyWorkingSet(me.Handle);
-            }
-            catch { }
-        });
     }
 
     static bool RobloxRunning()
@@ -2921,6 +2921,7 @@ public class MacroForm : Form
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
 
+        try { System.Runtime.GCSettings.LatencyMode = System.Runtime.GCLatencyMode.SustainedLowLatency; } catch { }
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
         Application.ThreadException += delegate(object s, ThreadExceptionEventArgs e) { LogError(e.Exception); };
         AppDomain.CurrentDomain.UnhandledException += delegate(object s, UnhandledExceptionEventArgs e)
