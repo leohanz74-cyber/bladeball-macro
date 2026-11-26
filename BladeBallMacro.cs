@@ -20,8 +20,8 @@ using System.Text;
 [assembly: AssemblyProduct("BladeBall Macro")]
 [assembly: AssemblyCompany("Leo")]
 [assembly: AssemblyCopyright("Leo 2026")]
-[assembly: AssemblyVersion("2.3.37.0")]
-[assembly: AssemblyFileVersion("2.3.37.0")]
+[assembly: AssemblyVersion("2.3.38.0")]
+[assembly: AssemblyFileVersion("2.3.38.0")]
 
 // ================= Design =================
 static class Theme
@@ -706,8 +706,8 @@ public class MacroForm : Form
     public const string ACCESS_KEY = "Hallo";
 
     // Versionsnummer: bei jedem neuen Update um 1 erhoehen
-    public const int BUILD = 37;              // intern fuer Updates, immer +1
-    public const string VERSION_NAME = "2.3"; // angezeigte Version
+    public const int BUILD = 38;              // intern fuer Updates, immer +1
+    public const string VERSION_NAME = "2.3.1"; // angezeigte Version
 
     // >>> Online-Updates fuer Freunde: hier den Raw-Link zu deiner BladeBallMacro.cs auf GitHub eintragen <<<
     // Beispiel: https://raw.githubusercontent.com/DEINNAME/bladeball-macro/main/BladeBallMacro.cs
@@ -1095,7 +1095,7 @@ public class MacroForm : Form
         tuneDetail = new Label { ForeColor = Theme.MUTED, BackColor = Theme.CARD, Font = new Font("Segoe UI", 8f), AutoSize = false, Bounds = new Rectangle(16, 74, 310, 16) };
         perf.Controls.Add(tuneDetail);
         perfValue.Cursor = Cursors.Hand;
-        perfValue.Click += delegate { StartTune(true); }; // Klick = jetzt neu abstimmen
+        perfValue.Click += delegate { StartTune(true); tuneDueMs = clock.ElapsedMilliseconds + 1500; }; // Klick = neu abstimmen; FPS sobald Roblox vorne ist
 
         RoundPanel h2Card = new RoundPanel { Bounds = new Rectangle(0, 280, 340, 60) };
         h2Card.Controls.Add(Theme.Caption("2ND HOTKEY", 16, 12));
@@ -2680,26 +2680,95 @@ public class MacroForm : Form
         return IntPtr.Zero;
     }
 
-    // Echte Roblox-FPS: Roblox beantwortet Fensternachrichten einmal pro Bild.
-    // Eine harmlose Leer-Nachricht (WM_NULL, die Windows selbst staendig schickt) pro Bild -> Antworten pro Sekunde = FPS.
-    int ProbeRobloxFps(int cap)
+    // Echte Roblox-FPS: der Roblox-Thread, der pro Bild einmal seine Fensternachrichten abarbeitet,
+    // beantwortet eine harmlose Leer-Nachricht (WM_NULL, schickt Windows selbst staendig) genau einmal pro Bild.
+    // Roblox hat mehrere Fenster/Threads -> alle pruefen und den nehmen, der wie eine Bildrate tickt.
+    delegate bool EnumWindowsProc(IntPtr h, IntPtr l);
+    [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr parent, EnumWindowsProc cb, IntPtr l);
+    [DllImport("user32.dll")] static extern bool EnumThreadWindows(uint tid, EnumWindowsProc cb, IntPtr l);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr h, StringBuilder sb, int max);
+    volatile bool probeWaitingForRoblox = false;
+
+    IntPtr fpsHwnd = IntPtr.Zero; // Fenster, dessen Thread im Bildtakt antwortet (gemerkt fuer naechste Messungen)
+
+    double ProbeWindow(IntPtr hw, int ms, int cap)
     {
-        IntPtr hw = RobloxWindow();
-        if (hw == IntPtr.Zero || IsIconic(hw) || !RobloxForeground()) return 0;
         long freq = Stopwatch.Frequency;
-        long start = clock.ElapsedTicks, end = start + freq * 3 / 4; // 0,75 s
+        long start = clock.ElapsedTicks, end = start + freq * ms / 1000;
+        int maxN = (int)((cap * 1.15 + 5) * ms / 1000.0) + 3; // mehr Antworten = kein Bildtakt -> sofort aufhoeren (keine Last fuer Roblox)
         int n = 0;
         while (clock.ElapsedTicks < end)
         {
-            if (running) return 0;
+            if (running) return -1;
             IntPtr r;
-            if (SendMessageTimeout(hw, 0x0000, IntPtr.Zero, IntPtr.Zero, 0x0002, 200, out r) == IntPtr.Zero) return 0; // SMTO_ABORTIFHUNG
-            n++;
+            if (SendMessageTimeout(hw, 0x0000, IntPtr.Zero, IntPtr.Zero, 0x0002, 200, out r) == IntPtr.Zero) return -1; // SMTO_ABORTIFHUNG
+            if (++n > maxN) return 9999;
         }
-        double rate = n / ((clock.ElapsedTicks - start) / (double)freq);
-        // Plausibel nur, wenn es wie eine Bildrate aussieht (sonst beantwortet Roblox Nachrichten nicht bildweise)
-        if (rate < 15 || rate > cap * 1.15 + 5) return 0;
-        return (int)Math.Round(rate);
+        return n / ((clock.ElapsedTicks - start) / (double)freq);
+    }
+
+    int ProbeRobloxFps(int cap)
+    {
+        IntPtr main = RobloxWindow();
+        if (main == IntPtr.Zero || IsIconic(main)) return 0;
+        if (!RobloxForeground()) { probeWaitingForRoblox = true; return 0; }
+        probeWaitingForRoblox = false;
+
+        // schneller Weg: das beim letzten Mal gefundene Fenster
+        if (fpsHwnd != IntPtr.Zero)
+        {
+            double r = ProbeWindow(fpsHwnd, 600, cap);
+            if (running) return 0;
+            if (r >= 15 && r <= cap * 1.15 + 5) return (int)Math.Round(r);
+            fpsHwnd = IntPtr.Zero;
+        }
+
+        // Kandidaten: Hauptfenster, Kindfenster und weitere Fenster derselben Threads (ein Fenster pro Thread)
+        List<IntPtr> wins = new List<IntPtr>();
+        Dictionary<uint, IntPtr> perThread = new Dictionary<uint, IntPtr>();
+        wins.Add(main);
+        EnumChildWindows(main, delegate(IntPtr h, IntPtr l) { if (wins.Count < 24) wins.Add(h); return true; }, IntPtr.Zero);
+        foreach (IntPtr h in wins)
+        {
+            uint pid;
+            uint tid = GetWindowThreadProcessId(h, out pid);
+            if (tid != 0 && !perThread.ContainsKey(tid)) perThread[tid] = h;
+        }
+        // auch unsichtbare Fenster anderer Roblox-Threads (z. B. des Render-Threads)
+        try
+        {
+            foreach (int id in robloxPids)
+            {
+                using (Process p = Process.GetProcessById(id))
+                {
+                    foreach (ProcessThread th in p.Threads)
+                    {
+                        if (perThread.Count >= 10) break;
+                        uint tid = (uint)th.Id;
+                        if (perThread.ContainsKey(tid)) continue;
+                        IntPtr first = IntPtr.Zero;
+                        EnumThreadWindows(tid, delegate(IntPtr h, IntPtr l) { first = h; return false; }, IntPtr.Zero);
+                        if (first != IntPtr.Zero) perThread[tid] = first;
+                    }
+                }
+            }
+        }
+        catch { }
+
+        double best = 0;
+        StringBuilder log = new StringBuilder("FPS probe (cap " + cap + "):");
+        foreach (KeyValuePair<uint, IntPtr> kv in perThread)
+        {
+            double rate = ProbeWindow(kv.Value, 400, cap);
+            if (rate < 0) { if (running) return 0; continue; }
+            StringBuilder cls = new StringBuilder(64);
+            GetClassName(kv.Value, cls, 64);
+            log.Append(" [" + cls + " t" + kv.Key + " " + (rate >= 9999 ? "instant" : rate.ToString("0") + "/s") + "]");
+            // sieht wie eine Bildrate aus? (sofort antwortende Threads liegen weit darueber)
+            if (rate >= 15 && rate <= cap * 1.15 + 5 && rate > best) { best = rate; fpsHwnd = kv.Value; }
+        }
+        LogInfo(log.ToString() + " -> " + (best > 0 ? best.ToString("0") + " FPS" : "no frame-paced thread"));
+        return (int)Math.Round(best);
     }
 
     void TuneInner(bool measureInput)
@@ -2766,7 +2835,8 @@ public class MacroForm : Form
         autoFloor = Math.Max(60, Math.Min(rate, fpsEstMax > 0 ? fpsEstMax : 60)); // nie unter 1 Druck pro Bild drosseln
 
         string limit = rate >= (int)capRate - 2 ? "cap " + cap : (fpsEstMax > 0 && fpsRate <= sustain ? "FPS" : "PC");
-        tuneInfo = (fpsEstMax > 0 ? "FPS " + fpsEstMax : "FPS ?") + " · timer " + latP95.ToString("0.00") + "ms · input "
+        string fpsTxt = fpsEstMax > 0 ? "FPS " + fpsEstMax : (probeWaitingForRoblox || robloxPids.Length == 0 ? "FPS: open Roblox" : "FPS n/a");
+        tuneInfo = fpsTxt + " · timer " + latP95.ToString("0.00") + "ms · input "
             + sendP95.ToString("0.00") + "ms · limit " + limit;
         LogInfo("AUTO tuned: " + rate + "/s (" + tuneInfo + ")");
     }
@@ -2781,7 +2851,7 @@ public class MacroForm : Form
         if (tuneDueMs == 0) { tuneDueMs = now + 8000; return; } // Spiel erst fertig laden lassen
         if (now >= tuneDueMs)
         {
-            tuneDueMs = now + 60000;
+            tuneDueMs = now + (fpsEstMax > 0 ? 60000 : 15000);
             StartTune(false);
         }
     }
