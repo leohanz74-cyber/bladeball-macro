@@ -20,8 +20,8 @@ using System.Text;
 [assembly: AssemblyProduct("BladeBall Macro")]
 [assembly: AssemblyCompany("Leo")]
 [assembly: AssemblyCopyright("Leo 2026")]
-[assembly: AssemblyVersion("2.3.38.0")]
-[assembly: AssemblyFileVersion("2.3.38.0")]
+[assembly: AssemblyVersion("2.4.39.0")]
+[assembly: AssemblyFileVersion("2.4.39.0")]
 
 // ================= Design =================
 static class Theme
@@ -706,8 +706,8 @@ public class MacroForm : Form
     public const string ACCESS_KEY = "Hallo";
 
     // Versionsnummer: bei jedem neuen Update um 1 erhoehen
-    public const int BUILD = 38;              // intern fuer Updates, immer +1
-    public const string VERSION_NAME = "2.3.1"; // angezeigte Version
+    public const int BUILD = 39;              // intern fuer Updates, immer +1
+    public const string VERSION_NAME = "2.4"; // angezeigte Version
 
     // >>> Online-Updates fuer Freunde: hier den Raw-Link zu deiner BladeBallMacro.cs auf GitHub eintragen <<<
     // Beispiel: https://raw.githubusercontent.com/DEINNAME/bladeball-macro/main/BladeBallMacro.cs
@@ -1327,6 +1327,7 @@ public class MacroForm : Form
         if (!overlayOn || !front || !GameOk())
         {
             if (overlay.Visible) overlay.Hide();
+            overlayShown = false;
             ovKey = "";
             return;
         }
@@ -1339,8 +1340,10 @@ public class MacroForm : Form
         if (!show)
         {
             if (overlay.Visible) overlay.Hide();
+            overlayShown = false;
             return;
         }
+        overlayShown = true;
 
         string t;
         Color c;
@@ -2634,7 +2637,6 @@ public class MacroForm : Form
     //   4) Kosten eines Tastendrucks (p95)           -> was Windows + andere Programme pro Druck brauchen
     // AUTO = das Kleinste davon -> so schnell wie moeglich, aber jedes Roblox-Bild bekommt einen Druck.
 
-    [DllImport("user32.dll")] static extern IntPtr SendMessageTimeout(IntPtr h, uint msg, IntPtr w, IntPtr l, uint flags, uint timeout, out IntPtr result);
 
     // sofortige Grundeinstellung, dann Feinabstimmung im Hintergrund
     void StartScan()
@@ -2680,95 +2682,61 @@ public class MacroForm : Form
         return IntPtr.Zero;
     }
 
-    // Echte Roblox-FPS: der Roblox-Thread, der pro Bild einmal seine Fensternachrichten abarbeitet,
-    // beantwortet eine harmlose Leer-Nachricht (WM_NULL, schickt Windows selbst staendig) genau einmal pro Bild.
-    // Roblox hat mehrere Fenster/Threads -> alle pruefen und den nehmen, der wie eine Bildrate tickt.
-    delegate bool EnumWindowsProc(IntPtr h, IntPtr l);
-    [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr parent, EnumWindowsProc cb, IntPtr l);
-    [DllImport("user32.dll")] static extern bool EnumThreadWindows(uint tid, EnumWindowsProc cb, IntPtr l);
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr h, StringBuilder sb, int max);
+    // ---------- Messungen ----------
+    // Echte Roblox-FPS, rein passiv: Windows zaehlt selbst, wie oft es den Bildschirm neu zusammensetzt (DWM).
+    // Wenn nur Roblox sich bewegt (Macro minimiert, Overlay aus), ist das genau die Bildrate von Roblox.
+    // Es wird nichts an Roblox geschickt.
+    [DllImport("dwmapi.dll")] static extern int DwmGetCompositionTimingInfo(IntPtr hwnd, IntPtr info);
+    [DllImport("kernel32.dll")] static extern bool GetSystemTimes(out long idle, out long kernel, out long user);
     volatile bool probeWaitingForRoblox = false;
+    volatile int lastCpuBusy = -1;   // CPU-Auslastung in % waehrend der Messung
+    volatile bool overlayShown = false;
+    volatile int dwmMode = 0;        // 0 unbekannt, 1 Windows setzt nur bei Aenderungen neu zusammen (messbar), 2 immer (nicht messbar)
 
-    IntPtr fpsHwnd = IntPtr.Zero; // Fenster, dessen Thread im Bildtakt antwortet (gemerkt fuer naechste Messungen)
-
-    double ProbeWindow(IntPtr hw, int ms, int cap)
+    static ulong DwmFrameCount()
     {
-        long freq = Stopwatch.Frequency;
-        long start = clock.ElapsedTicks, end = start + freq * ms / 1000;
-        int maxN = (int)((cap * 1.15 + 5) * ms / 1000.0) + 3; // mehr Antworten = kein Bildtakt -> sofort aufhoeren (keine Last fuer Roblox)
-        int n = 0;
-        while (clock.ElapsedTicks < end)
-        {
-            if (running) return -1;
-            IntPtr r;
-            if (SendMessageTimeout(hw, 0x0000, IntPtr.Zero, IntPtr.Zero, 0x0002, 200, out r) == IntPtr.Zero) return -1; // SMTO_ABORTIFHUNG
-            if (++n > maxN) return 9999;
-        }
-        return n / ((clock.ElapsedTicks - start) / (double)freq);
-    }
-
-    int ProbeRobloxFps(int cap)
-    {
-        IntPtr main = RobloxWindow();
-        if (main == IntPtr.Zero || IsIconic(main)) return 0;
-        if (!RobloxForeground()) { probeWaitingForRoblox = true; return 0; }
-        probeWaitingForRoblox = false;
-
-        // schneller Weg: das beim letzten Mal gefundene Fenster
-        if (fpsHwnd != IntPtr.Zero)
-        {
-            double r = ProbeWindow(fpsHwnd, 600, cap);
-            if (running) return 0;
-            if (r >= 15 && r <= cap * 1.15 + 5) return (int)Math.Round(r);
-            fpsHwnd = IntPtr.Zero;
-        }
-
-        // Kandidaten: Hauptfenster, Kindfenster und weitere Fenster derselben Threads (ein Fenster pro Thread)
-        List<IntPtr> wins = new List<IntPtr>();
-        Dictionary<uint, IntPtr> perThread = new Dictionary<uint, IntPtr>();
-        wins.Add(main);
-        EnumChildWindows(main, delegate(IntPtr h, IntPtr l) { if (wins.Count < 24) wins.Add(h); return true; }, IntPtr.Zero);
-        foreach (IntPtr h in wins)
-        {
-            uint pid;
-            uint tid = GetWindowThreadProcessId(h, out pid);
-            if (tid != 0 && !perThread.ContainsKey(tid)) perThread[tid] = h;
-        }
-        // auch unsichtbare Fenster anderer Roblox-Threads (z. B. des Render-Threads)
+        IntPtr p = Marshal.AllocHGlobal(292); // sizeof(DWM_TIMING_INFO), gepackt
         try
         {
-            foreach (int id in robloxPids)
-            {
-                using (Process p = Process.GetProcessById(id))
-                {
-                    foreach (ProcessThread th in p.Threads)
-                    {
-                        if (perThread.Count >= 10) break;
-                        uint tid = (uint)th.Id;
-                        if (perThread.ContainsKey(tid)) continue;
-                        IntPtr first = IntPtr.Zero;
-                        EnumThreadWindows(tid, delegate(IntPtr h, IntPtr l) { first = h; return false; }, IntPtr.Zero);
-                        if (first != IntPtr.Zero) perThread[tid] = first;
-                    }
-                }
-            }
+            for (int i = 0; i < 292; i += 4) Marshal.WriteInt32(p, i, 0);
+            Marshal.WriteInt32(p, 0, 292);
+            if (DwmGetCompositionTimingInfo(IntPtr.Zero, p) != 0) return 0;
+            return (ulong)Marshal.ReadInt64(p, 56); // cFrame
         }
-        catch { }
+        catch { return 0; }
+        finally { Marshal.FreeHGlobal(p); }
+    }
 
-        double best = 0;
-        StringBuilder log = new StringBuilder("FPS probe (cap " + cap + "):");
-        foreach (KeyValuePair<uint, IntPtr> kv in perThread)
+    // misst 1 Sekunde lang Roblox-FPS (wenn moeglich) und CPU-Auslastung; -1 = abgebrochen
+    int MeasureFpsAndCpu(int cap, out int cpuBusy)
+    {
+        cpuBusy = -1;
+        long freq = Stopwatch.Frequency;
+        IntPtr main = RobloxWindow();
+        bool canFps = main != IntPtr.Zero && !IsIconic(main) && RobloxForeground() && !overlayShown && dwmMode == 1; // nur wenn die Gegenprobe gezeigt hat, dass die Messung stimmt
+        probeWaitingForRoblox = !canFps;
+
+        long i0, k0, u0, i1, k1, u1;
+        GetSystemTimes(out i0, out k0, out u0);
+        ulong f0 = canFps ? DwmFrameCount() : 0;
+        long t0 = clock.ElapsedTicks;
+        while (clock.ElapsedTicks - t0 < freq)
         {
-            double rate = ProbeWindow(kv.Value, 400, cap);
-            if (rate < 0) { if (running) return 0; continue; }
-            StringBuilder cls = new StringBuilder(64);
-            GetClassName(kv.Value, cls, 64);
-            log.Append(" [" + cls + " t" + kv.Key + " " + (rate >= 9999 ? "instant" : rate.ToString("0") + "/s") + "]");
-            // sieht wie eine Bildrate aus? (sofort antwortende Threads liegen weit darueber)
-            if (rate >= 15 && rate <= cap * 1.15 + 5 && rate > best) { best = rate; fpsHwnd = kv.Value; }
+            if (running) return -1;
+            Thread.Sleep(50);
         }
-        LogInfo(log.ToString() + " -> " + (best > 0 ? best.ToString("0") + " FPS" : "no frame-paced thread"));
-        return (int)Math.Round(best);
+        ulong f1 = canFps ? DwmFrameCount() : 0;
+        double secs = (clock.ElapsedTicks - t0) / (double)freq;
+        GetSystemTimes(out i1, out k1, out u1);
+        long total = (k1 - k0) + (u1 - u0); // Kernel-Zeit enthaelt Leerlauf
+        if (total > 0) cpuBusy = (int)Math.Round(100.0 * (1.0 - (double)(i1 - i0) / total));
+
+        if (!canFps || !RobloxForeground() || f0 == 0 || f1 <= f0) return 0;
+        double rate = (f1 - f0) / secs;
+        int limit = Math.Min(cap, refreshHz > 1 ? refreshHz : cap);
+        // Roblox im exklusiven/randlosen Vollbild umgeht die Zusammensetzung -> dann nicht messbar
+        if (rate < 20 || rate > limit * 1.1 + 5) return 0;
+        return (int)Math.Round(rate);
     }
 
     void TuneInner(bool measureInput)
@@ -2777,9 +2745,9 @@ public class MacroForm : Form
         long freq = Stopwatch.Frequency;
         Random rnd = new Random();
 
-        // 1) Timer-Genauigkeit: 150 Wartezeiten zwischen 1 und 3 ms
+        // 1) Timer-Genauigkeit
         List<double> lat = new List<double>();
-        for (int i = 0; i < 150; i++)
+        for (int i = 0; i < 100; i++)
         {
             if (running) return;
             long target = clock.ElapsedTicks + freq * (1000 + rnd.Next(2000)) / 1000000;
@@ -2788,43 +2756,64 @@ public class MacroForm : Form
         }
         double latP95 = P95(lat);
 
-        // 2) Kosten eines Tastendrucks (unsichtbare Taste F24; nur beim Start / auf Wunsch)
-        double sendP95 = lastSendP95;
-        if (measureInput || sendP95 < 0)
+        // 2) Kosten eines Tastendrucks auf diesem PC (Windows + Programme wie Discord, Maus-Software ...)
+        INPUT[] dn = new INPUT[1], up = new INPUT[1];
+        dn[0].type = 1; dn[0].U.ki.wVk = 0x87; dn[0].U.ki.dwExtraInfo = (IntPtr)INJECT_MAGIC; // F24: gibt es auf keiner Tastatur
+        up[0] = dn[0]; up[0].U.ki.dwFlags = KEYEVENTF_KEYUP;
+        int sz = Marshal.SizeOf(typeof(INPUT));
+        List<double> snd = new List<double>();
+        for (int i = 0; i < 30; i++)
         {
-            INPUT[] dn = new INPUT[1], up = new INPUT[1];
-            dn[0].type = 1; dn[0].U.ki.wVk = 0x87; dn[0].U.ki.dwExtraInfo = (IntPtr)INJECT_MAGIC;
-            up[0] = dn[0]; up[0].U.ki.dwFlags = KEYEVENTF_KEYUP;
-            int sz = Marshal.SizeOf(typeof(INPUT));
-            List<double> snd = new List<double>();
-            for (int i = 0; i < 30; i++)
-            {
-                if (running) return;
-                long a = clock.ElapsedTicks;
-                SendInput(1, dn, sz);
-                long b = clock.ElapsedTicks;
-                SendInput(1, up, sz);
-                long c = clock.ElapsedTicks;
-                snd.Add((b - a) * 1000.0 / freq);
-                snd.Add((c - b) * 1000.0 / freq);
-                WaitUntil(clock.ElapsedTicks + freq / 500, false);
-            }
-            sendP95 = P95(snd);
+            if (running) return;
+            long a = clock.ElapsedTicks;
+            SendInput(1, dn, sz);
+            long b = clock.ElapsedTicks;
+            SendInput(1, up, sz);
+            long c = clock.ElapsedTicks;
+            snd.Add((b - a) * 1000.0 / freq);
+            snd.Add((c - b) * 1000.0 / freq);
+            WaitUntil(clock.ElapsedTicks + freq / 500, false);
+        }
+        double sendP95 = P95(snd);
+
+        // 2b) Gegenprobe (einmalig, wenn Roblox nicht vorne ist): zaehlt Windows auch im Ruhezustand jedes Bild mit?
+        if (dwmMode == 0 && !RobloxForeground() && refreshHz > 1)
+        {
+            ulong g0 = DwmFrameCount();
+            long s0 = clock.ElapsedTicks;
+            Thread.Sleep(500);
+            ulong g1 = DwmFrameCount();
+            double idleRate = g0 > 0 && g1 >= g0 ? (g1 - g0) / ((clock.ElapsedTicks - s0) / (double)freq) : -1;
+            if (idleRate >= 0) dwmMode = idleRate >= refreshHz * 0.8 ? 2 : 1;
+            LogInfo("DWM idle composition " + idleRate.ToString("0") + "/s at " + refreshHz + " Hz -> " + (dwmMode == 2 ? "FPS not measurable" : "FPS measurable"));
         }
 
-        // 3) echte Roblox-FPS (nur wenn Roblox vorne ist)
+        // 3) echte Roblox-FPS + CPU-Auslastung (1 s, passiv)
         int cap = RobloxFpsLimit();
-        int fps = ProbeRobloxFps(cap);
-        if (running) return;
-        if (fps > 0) fpsEstMax = Math.Max(fps, (int)(fpsEstMax * 0.85)); // gleitendes Maximum: FPS schwanken
+        int cpuBusy;
+        int fps = MeasureFpsAndCpu(cap, out cpuBusy);
+        if (fps < 0 || running) return;
+        if (fps > 0) fpsEstMax = Math.Max(fps, (int)(fpsEstMax * 0.85)); // FPS schwanken -> gleitendes Maximum
+        if (cpuBusy >= 0) lastCpuBusy = cpuBusy;
 
         // 4) Rate berechnen
+        double perPressMs = 2 * sendP95;                       // zwei Tastenereignisse pro Druck
+        // CPU-Budget fuers Spammen: je voller die CPU, desto weniger (sonst sinken Roblox' FPS)
+        double budget = lastCpuBusy < 0 ? 0.06 : (lastCpuBusy >= 90 ? 0.03 : (lastCpuBusy >= 75 ? 0.05 : 0.08));
+        double cpuRate = perPressMs > 0 ? budget * 1000.0 / perPressMs : 1000;
+        double sustain = 1000.0 / ((2 * latP95 + perPressMs) * 2.0); // Timing mit doppelter Reserve
         double capRate = cap * 1.25;
-        double fpsRate = fpsEstMax > 0 ? fpsEstMax * 1.3 : capRate;
-        double perPressMs = 2 * latP95 + 2 * sendP95;                 // zwei Wartezeiten + zwei Tastenereignisse
-        double sustain = perPressMs > 0 ? 1000.0 / (perPressMs * 2.0) : 1000; // doppelte Reserve
-        double best = Math.Min(capRate, Math.Min(fpsRate, sustain));
+        double fpsRate = fpsEstMax > 0 ? fpsEstMax * 1.25 : capRate; // 1,25 Druecke pro echtem Bild
+        double best = Math.Min(Math.Min(capRate, fpsRate), Math.Min(cpuRate, sustain));
+        // aber nie unter 1 Druck pro gemessenem Bild (sonst verlierst du Clashes)
+        if (fpsEstMax > 0) best = Math.Max(best, fpsEstMax * 1.05);
         int rate = (int)(Math.Round(Math.Max(60, Math.Min(300, best)) / 5.0) * 5);
+
+        string limit;
+        if (best >= capRate - 3) limit = "cap " + cap;
+        else if (fpsEstMax > 0 && fpsRate <= Math.Min(cpuRate, sustain) + 1) limit = "FPS";
+        else if (cpuRate <= sustain) limit = "CPU";
+        else limit = "PC timing";
 
         lastLatP95 = latP95;
         lastSendP95 = sendP95;
@@ -2832,13 +2821,12 @@ public class MacroForm : Form
         presetCps[0] = rate;
         autoBest = rate;
         if (!running) autoCps = rate;
-        autoFloor = Math.Max(60, Math.Min(rate, fpsEstMax > 0 ? fpsEstMax : 60)); // nie unter 1 Druck pro Bild drosseln
+        autoFloor = Math.Max(60, Math.Min(rate, fpsEstMax > 0 ? fpsEstMax : 60));
 
-        string limit = rate >= (int)capRate - 2 ? "cap " + cap : (fpsEstMax > 0 && fpsRate <= sustain ? "FPS" : "PC");
-        string fpsTxt = fpsEstMax > 0 ? "FPS " + fpsEstMax : (probeWaitingForRoblox || robloxPids.Length == 0 ? "FPS: open Roblox" : "FPS n/a");
-        tuneInfo = fpsTxt + " · timer " + latP95.ToString("0.00") + "ms · input "
-            + sendP95.ToString("0.00") + "ms · limit " + limit;
-        LogInfo("AUTO tuned: " + rate + "/s (" + tuneInfo + ")");
+        string fpsTxt = fpsEstMax > 0 ? "FPS " + fpsEstMax : (dwmMode == 2 ? "FPS n/a" : (probeWaitingForRoblox || robloxPids.Length == 0 ? "FPS: in game" : "FPS n/a"));
+        tuneInfo = fpsTxt + " · CPU " + (lastCpuBusy >= 0 ? lastCpuBusy + "%" : "?") + " · input " + sendP95.ToString("0.00") + "ms · limit " + limit;
+        LogInfo("AUTO tuned: " + rate + "/s (fps " + fps + ", fpsMax " + fpsEstMax + ", cpu " + lastCpuBusy + "%, timer p95 "
+            + latP95.ToString("0.00") + "ms, input p95 " + sendP95.ToString("0.00") + "ms, cap " + cap + ", limit " + limit + ")");
     }
 
     // automatisch nachstimmen, solange du in Blade Ball bist (alle 60 s, nie waehrend eines Clashs)
