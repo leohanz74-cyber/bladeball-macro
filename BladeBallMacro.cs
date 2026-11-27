@@ -20,8 +20,8 @@ using System.Text;
 [assembly: AssemblyProduct("BladeBall Macro")]
 [assembly: AssemblyCompany("Leo")]
 [assembly: AssemblyCopyright("Leo 2026")]
-[assembly: AssemblyVersion("2.4.39.0")]
-[assembly: AssemblyFileVersion("2.4.39.0")]
+[assembly: AssemblyVersion("2.5.40.0")]
+[assembly: AssemblyFileVersion("2.5.40.0")]
 
 // ================= Design =================
 static class Theme
@@ -706,8 +706,8 @@ public class MacroForm : Form
     public const string ACCESS_KEY = "Hallo";
 
     // Versionsnummer: bei jedem neuen Update um 1 erhoehen
-    public const int BUILD = 39;              // intern fuer Updates, immer +1
-    public const string VERSION_NAME = "2.4"; // angezeigte Version
+    public const int BUILD = 40;              // intern fuer Updates, immer +1
+    public const string VERSION_NAME = "2.5"; // angezeigte Version
 
     // >>> Online-Updates fuer Freunde: hier den Raw-Link zu deiner BladeBallMacro.cs auf GitHub eintragen <<<
     // Beispiel: https://raw.githubusercontent.com/DEINNAME/bladeball-macro/main/BladeBallMacro.cs
@@ -805,6 +805,7 @@ public class MacroForm : Form
     volatile bool scanning = false;   // = Feinabstimmung laeuft
     Label tuneDetail;
     volatile string tuneInfo = "";
+    int tuneMisses = 0;
     long tuneDueMs = 0;                // naechste automatische Feinabstimmung im Spiel
     int fpsEstMax = 0;                 // gemessene Roblox-FPS (gleitendes Maximum)
     double lastLatP95 = -1, lastSendP95 = -1;
@@ -1159,18 +1160,21 @@ public class MacroForm : Form
         };
 
         // ---------- Seite EXTRAS ----------
-        extrasPage = new Panel { Bounds = new Rectangle(20, 222, 340, 340), BackColor = Theme.BG, Visible = false };
+        extrasPage = new Panel { Bounds = new Rectangle(20, 222, 340, 342), BackColor = Theme.BG, Visible = false };
         Label d2;
         extrasPage.Controls.Add(Row(0, "Chat Protection", "Pauses while you type (/ or -)", out chatBtn, out d2));
-        RoundPanel ovRow = Row(60, "In-Game Overlay", "Shows briefly when status changes", out ovlBtn, out d2);
+        RoundPanel ovRow = Row(57, "In-Game Overlay", "Shows briefly when status changes", out ovlBtn, out d2);
         d2.Width = 165;
         ovlPosBtn = Theme.Btn(PosArrows[0], new Rectangle(188, 12, 58, 32), Theme.CHIP, 12f);
         ((RoundButton)ovlPosBtn).Radius = 16;
         ovRow.Controls.Add(ovlPosBtn);
         extrasPage.Controls.Add(ovRow);
-        extrasPage.Controls.Add(Row(120, "Sound Feedback", "Beeps on toggle, chat and panic", out sndBtn, out d2));
-        extrasPage.Controls.Add(Row(180, "Panic Key (F8)", "F8 turns the whole macro on/off", out panicBtn, out d2));
-        extrasPage.Controls.Add(Row(240, "Blade Ball Only", "", out bladeBtn, out bladeDesc));
+        extrasPage.Controls.Add(Row(114, "Sound Feedback", "Beeps on toggle, chat and panic", out sndBtn, out d2));
+        extrasPage.Controls.Add(Row(171, "Panic Key (F8)", "F8 turns the whole macro on/off", out panicBtn, out d2));
+        extrasPage.Controls.Add(Row(228, "Blade Ball Only", "", out bladeBtn, out bladeDesc));
+        extrasPage.Controls.Add(Row(285, "Mouse Test", MOUSE_HINT, out mouseBtn, out mouseDesc));
+        mouseBtn.Text = "TEST";
+        mouseBtn.Click += delegate { StartMouseTest(); };
         bladeBtn.Click += delegate { bladeOnly = !bladeOnly; RefreshUi(true); SaveSettings(); };
 
         chatBtn.Click += delegate { chatProtect = !chatProtect; chatOpen = false; RefreshUi(true); SaveSettings(); };
@@ -2198,11 +2202,105 @@ public class MacroForm : Form
     volatile uint hookThreadId = 0;
     const uint WM_UPDATE_MOUSEHOOK = 0x8001; // WM_APP + 1
 
+    // ---------- Maus-Test: prueft Doppelklick-Fehler (verschlissener Schalter) und Abfragerate ----------
+    const string MOUSE_HINT = "Checks clicks & Hz – works in game too";
+    const int MT_SECONDS = 10;
+    Button mouseBtn; Label mouseDesc;
+    volatile bool mouseTest = false;
+    System.Windows.Forms.Timer mtTimer;
+    long mtEnd;
+    // nur vom Eingabe-Thread beschrieben
+    int mtClicks, mtGhost, mtMaxCps, mtBucket, mtMaxBucket, mtMinGapMs, mtMinHoldMs;
+    long mtLastUp, mtLastDown, mtBucketStart;
+    bool mtDown;
+    readonly Queue<long> mtRecent = new Queue<long>();
+
+    void StartMouseTest()
+    {
+        if (mouseTest) return;
+        mtClicks = 0; mtGhost = 0; mtMaxCps = 0; mtBucket = 0; mtMaxBucket = 0; mtMinGapMs = 9999; mtMinHoldMs = 9999;
+        mtLastUp = 0; mtLastDown = 0; mtBucketStart = 0; mtDown = false; mtRecent.Clear();
+        mtEnd = clock.ElapsedMilliseconds + MT_SECONDS * 1000;
+        mouseTest = true;
+        RequestMouseHookUpdate();
+        SetText(mouseBtn, "...");
+        SetFore(mouseDesc, Theme.TEXT2);
+        if (mtTimer == null)
+        {
+            mtTimer = new System.Windows.Forms.Timer { Interval = 200 };
+            mtTimer.Tick += delegate
+            {
+                long left = mtEnd - clock.ElapsedMilliseconds;
+                if (left > 0) { SetText(mouseDesc, "Click & move fast  ·  " + ((left + 999) / 1000) + " s  ·  " + mtClicks + " clicks"); return; }
+                mtTimer.Stop();
+                FinishMouseTest();
+            };
+        }
+        SetText(mouseDesc, "Click & move fast  ·  " + MT_SECONDS + " s");
+        mtTimer.Start();
+    }
+
+    void MouseTestEvent(int kind) // 0 Bewegung, 1 links runter, 2 links hoch (Eingabe-Thread)
+    {
+        if (!mouseTest) return;
+        long now = clock.ElapsedTicks, f = Stopwatch.Frequency;
+        if (kind == 0)
+        {
+            if (now - mtBucketStart >= f / 5) { if (mtBucket > mtMaxBucket) mtMaxBucket = mtBucket; mtBucket = 0; mtBucketStart = now; }
+            mtBucket++;
+            return;
+        }
+        if (kind == 1)
+        {
+            if (mtDown) return;
+            mtDown = true;
+            if (mtLastUp != 0)
+            {
+                int gap = (int)((now - mtLastUp) * 1000 / f);
+                if (gap < mtMinGapMs) mtMinGapMs = gap;
+                if (gap < 15) mtGhost++; // so schnell kann kein Finger loslassen und neu druecken
+            }
+            mtClicks++;
+            mtLastDown = now;
+            mtRecent.Enqueue(now);
+            while (mtRecent.Count > 0 && now - mtRecent.Peek() > f) mtRecent.Dequeue();
+            if (mtRecent.Count > mtMaxCps) mtMaxCps = mtRecent.Count;
+        }
+        else
+        {
+            if (!mtDown) return;
+            mtDown = false;
+            int hold = (int)((now - mtLastDown) * 1000 / f);
+            if (hold < mtMinHoldMs) mtMinHoldMs = hold;
+            if (hold < 5) mtGhost++; // Prellen beim Druecken
+            mtLastUp = now;
+        }
+    }
+
+    void FinishMouseTest()
+    {
+        mouseTest = false;
+        RequestMouseHookUpdate();
+        if (mtBucket > mtMaxBucket) mtMaxBucket = mtBucket;
+        int hz = mtMaxBucket * 5;
+        string hzTxt = hz < 60 ? "? Hz" : (hz < 180 ? "125 Hz" : (hz < 380 ? "250 Hz" : (hz < 750 ? "500 Hz" : (hz < 1500 ? "1000 Hz" : "1000+ Hz"))));
+        string res; Color col;
+        if (mtClicks < 3) { res = "No clicks seen – press TEST and click"; col = Theme.WARN; }
+        else if (mtGhost > 0) { res = "⚠ " + mtGhost + "× ghost click – switch is worn"; col = Theme.WARN; }
+        else if (hz >= 60 && hz < 180) { res = "⚠ 125 Hz – set 1000 Hz in mouse app"; col = Theme.WARN; }
+        else { res = "✓ Mouse OK  ·  " + hzTxt + "  ·  " + mtMaxCps + " CPS"; col = Theme.OK; }
+        SetText(mouseDesc, res);
+        SetFore(mouseDesc, col);
+        SetText(mouseBtn, "TEST");
+        LogInfo("Mouse test: clicks " + mtClicks + ", ghost " + mtGhost + ", min gap " + (mtMinGapMs == 9999 ? -1 : mtMinGapMs) + "ms, min hold "
+            + (mtMinHoldMs == 9999 ? -1 : mtMinHoldMs) + "ms, max " + mtMaxCps + " CPS, ~" + hz + " Hz (" + (useRaw ? "raw" : "hook") + ")");
+    }
+
     static bool IsMouseKey(Keys k) { return k == Keys.XButton1 || k == Keys.XButton2 || k == Keys.MButton; }
 
     bool MouseHookNeeded()
     {
-        return IsMouseKey(hotKey) || IsMouseKey(hotKey2) || (capturing && (captureTarget == 2 || captureTarget == 3));
+        return mouseTest || IsMouseKey(hotKey) || IsMouseKey(hotKey2) || (capturing && (captureTarget == 2 || captureTarget == 3));
     }
 
     // ---------- Raw Input ----------
@@ -2275,6 +2373,12 @@ public class MacroForm : Form
         else if (type == 0 && useRaw) // Maus (nur registriert, wenn eine Maustaste Hotkey ist)
         {
             int bf = Marshal.ReadInt16(rawBuf, rawHdr + 4) & 0xFFFF;
+            if (mouseTest && dev != IntPtr.Zero)
+            {
+                if ((bf & 0x0001) != 0) MouseTestEvent(1);
+                if ((bf & 0x0002) != 0) MouseTestEvent(2);
+                if (Marshal.ReadInt32(rawBuf, rawHdr + 12) != 0 || Marshal.ReadInt32(rawBuf, rawHdr + 16) != 0) MouseTestEvent(0);
+            }
             if ((bf & 0x0010) != 0) OnMouseButton(Keys.MButton, true);
             if ((bf & 0x0020) != 0) OnMouseButton(Keys.MButton, false);
             if ((bf & 0x0040) != 0) OnMouseButton(Keys.XButton1, true);
@@ -2479,6 +2583,12 @@ public class MacroForm : Form
             int flags = Marshal.ReadInt32(l, 12);
             if ((flags & 1) == 0)
             {
+                if (mouseTest)
+                {
+                    if (msg == 0x0200) MouseTestEvent(0);
+                    else if (msg == 0x0201) MouseTestEvent(1);
+                    else if (msg == 0x0202) MouseTestEvent(2);
+                }
                 if (msg == 0x020B || msg == 0x020C)
                 {
                     int x = (Marshal.ReadInt32(l, 8) >> 16) & 0xFFFF;
@@ -2745,16 +2855,18 @@ public class MacroForm : Form
         long freq = Stopwatch.Frequency;
         Random rnd = new Random();
 
+        // im Spiel nur passiv nachmessen (FPS + CPU): keine Test-Tasten, kein Timer-Test waehrend du spielst
+        bool reuse = !measureInput && lastSendP95 > 0 && lastLatP95 >= 0;
         // 1) Timer-Genauigkeit
         List<double> lat = new List<double>();
-        for (int i = 0; i < 100; i++)
+        for (int i = 0; i < (reuse ? 0 : 100); i++)
         {
             if (running) return;
             long target = clock.ElapsedTicks + freq * (1000 + rnd.Next(2000)) / 1000000;
             WaitUntil(target, false);
             lat.Add(Math.Max(0, clock.ElapsedTicks - target) * 1000.0 / freq);
         }
-        double latP95 = P95(lat);
+        double latP95 = reuse ? lastLatP95 : P95(lat);
 
         // 2) Kosten eines Tastendrucks auf diesem PC (Windows + Programme wie Discord, Maus-Software ...)
         INPUT[] dn = new INPUT[1], up = new INPUT[1];
@@ -2762,7 +2874,7 @@ public class MacroForm : Form
         up[0] = dn[0]; up[0].U.ki.dwFlags = KEYEVENTF_KEYUP;
         int sz = Marshal.SizeOf(typeof(INPUT));
         List<double> snd = new List<double>();
-        for (int i = 0; i < 30; i++)
+        for (int i = 0; i < (reuse ? 0 : 30); i++)
         {
             if (running) return;
             long a = clock.ElapsedTicks;
@@ -2774,7 +2886,7 @@ public class MacroForm : Form
             snd.Add((c - b) * 1000.0 / freq);
             WaitUntil(clock.ElapsedTicks + freq / 500, false);
         }
-        double sendP95 = P95(snd);
+        double sendP95 = reuse ? lastSendP95 : P95(snd);
 
         // 2b) Gegenprobe (einmalig, wenn Roblox nicht vorne ist): zaehlt Windows auch im Ruhezustand jedes Bild mit?
         if (dwmMode == 0 && !RobloxForeground() && refreshHz > 1)
@@ -2823,7 +2935,7 @@ public class MacroForm : Form
         if (!running) autoCps = rate;
         autoFloor = Math.Max(60, Math.Min(rate, fpsEstMax > 0 ? fpsEstMax : 60));
 
-        string fpsTxt = fpsEstMax > 0 ? "FPS " + fpsEstMax : (dwmMode == 2 ? "FPS n/a" : (probeWaitingForRoblox || robloxPids.Length == 0 ? "FPS: in game" : "FPS n/a"));
+        string fpsTxt = fpsEstMax > 0 ? "FPS " + fpsEstMax : (dwmMode == 2 ? "FPS n/a" : (dwmMode == 1 && !probeWaitingForRoblox && fps == 0) ? "FPS n/a (fullscr.)" : (probeWaitingForRoblox || robloxPids.Length == 0 ? "FPS: in game" : "FPS n/a"));
         tuneInfo = fpsTxt + " · CPU " + (lastCpuBusy >= 0 ? lastCpuBusy + "%" : "?") + " · input " + sendP95.ToString("0.00") + "ms · limit " + limit;
         LogInfo("AUTO tuned: " + rate + "/s (fps " + fps + ", fpsMax " + fpsEstMax + ", cpu " + lastCpuBusy + "%, timer p95 "
             + latP95.ToString("0.00") + "ms, input p95 " + sendP95.ToString("0.00") + "ms, cap " + cap + ", limit " + limit + ")");
@@ -2839,7 +2951,7 @@ public class MacroForm : Form
         if (tuneDueMs == 0) { tuneDueMs = now + 8000; return; } // Spiel erst fertig laden lassen
         if (now >= tuneDueMs)
         {
-            tuneDueMs = now + (fpsEstMax > 0 ? 60000 : 15000);
+            tuneDueMs = now + (fpsEstMax > 0 || ++tuneMisses > 3 ? 60000 : 15000);
             StartTune(false);
         }
     }
@@ -2866,7 +2978,7 @@ public class MacroForm : Form
         bool hadRoblox = robloxPids.Length > 0;
         // Prozessliste nur alle 3 s (solange Roblox laeuft), sonst jede Sekunde
         if (robloxPids.Length == 0 || pollCount % 3 == 0) RefreshRobloxPids();
-        if (!hadRoblox && robloxPids.Length > 0) { UpdateAutoMax(); tuneDueMs = 0; fpsEstMax = 0; }
+        if (!hadRoblox && robloxPids.Length > 0) { UpdateAutoMax(); tuneDueMs = 0; fpsEstMax = 0; tuneMisses = 0; }
         if (robloxPids.Length == 0)
         {
             gameState = 0;
