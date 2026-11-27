@@ -20,8 +20,8 @@ using System.Text;
 [assembly: AssemblyProduct("BladeBall Macro")]
 [assembly: AssemblyCompany("Leo")]
 [assembly: AssemblyCopyright("Leo 2026")]
-[assembly: AssemblyVersion("2.5.40.0")]
-[assembly: AssemblyFileVersion("2.5.40.0")]
+[assembly: AssemblyVersion("2.5.41.0")]
+[assembly: AssemblyFileVersion("2.5.41.0")]
 
 // ================= Design =================
 static class Theme
@@ -706,8 +706,8 @@ public class MacroForm : Form
     public const string ACCESS_KEY = "Hallo";
 
     // Versionsnummer: bei jedem neuen Update um 1 erhoehen
-    public const int BUILD = 40;              // intern fuer Updates, immer +1
-    public const string VERSION_NAME = "2.5"; // angezeigte Version
+    public const int BUILD = 41;              // intern fuer Updates, immer +1
+    public const string VERSION_NAME = "2.5.1"; // angezeigte Version
 
     // >>> Online-Updates fuer Freunde: hier den Raw-Link zu deiner BladeBallMacro.cs auf GitHub eintragen <<<
     // Beispiel: https://raw.githubusercontent.com/DEINNAME/bladeball-macro/main/BladeBallMacro.cs
@@ -2287,7 +2287,7 @@ public class MacroForm : Form
         string res; Color col;
         if (mtClicks < 3) { res = "No clicks seen – press TEST and click"; col = Theme.WARN; }
         else if (mtGhost > 0) { res = "⚠ " + mtGhost + "× ghost click – switch is worn"; col = Theme.WARN; }
-        else if (hz >= 60 && hz < 180) { res = "⚠ 125 Hz – set 1000 Hz in mouse app"; col = Theme.WARN; }
+        else if (hz >= 60 && hz < 180) { res = "✓ Clicks OK  ·  125 Hz (1000 Hz is a bit better)"; col = Theme.OK; }
         else { res = "✓ Mouse OK  ·  " + hzTxt + "  ·  " + mtMaxCps + " CPS"; col = Theme.OK; }
         SetText(mouseDesc, res);
         SetFore(mouseDesc, col);
